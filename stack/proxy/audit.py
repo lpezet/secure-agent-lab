@@ -20,7 +20,9 @@ def log_event(event: str, **fields) -> None:
     if not _AUDIT_LOG:
         return
     line = json.dumps({
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # +00:00, not a "Z" suffix — matches cred-gateway's nginx
+        # $time_iso8601, which has no "Z"-suffixed form.
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
         "service": "proxy",
         "event": event,
         **fields,

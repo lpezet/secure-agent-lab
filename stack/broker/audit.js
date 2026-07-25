@@ -14,7 +14,10 @@ const AUDIT_LOG = process.env.AUDIT_LOG;
 function logEvent(event, fields = {}) {
   if (!AUDIT_LOG) return;
   const line = JSON.stringify({
-    ts: new Date().toISOString(),
+    // +00:00 and no milliseconds — matches cred-gateway's nginx
+    // $time_iso8601 and the proxy's audit.py exactly, rather than
+    // toISOString()'s "...ssZ".
+    ts: new Date().toISOString().replace(/\.\d+Z$/, "+00:00"),
     service: "broker",
     event,
     ...fields,
