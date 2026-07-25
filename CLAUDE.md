@@ -14,7 +14,16 @@ A Docker setup to run autonomous agents/harness (e.g. Claude Code) without expos
      │ git creds only               │ fetches creds from broker
      ▼                              ▼
 [cred-gateway: nginx]  ──────►  [broker: Node.js]  ──reads──►  ~/.config/agent-creds/
+     │                              │
+     │                              │  JSONL, no secret values
+     ▼                              ▼
+              [audit-logs volume]
+             │                    │
+             ▼                    ▼
+    [log-rotator: cron+logrotate] [observer: :9000, loopback-only]
 ```
+
+broker, proxy, and cred-gateway each write a structured JSONL audit trail (what got injected/blocked/issued, never a credential value) to a shared `audit-logs` named volume. `observer` tails it and serves a live view; `log-rotator` keeps it bounded. Neither has a `networks:` entry — they reach the volume without joining `secure` or `dev`, so the audit trail cannot become a new channel between the two. See the `observer` and `log-rotator` sections below.
 
 **Two Docker networks enforce the security boundary:**
 
@@ -60,6 +69,8 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 
 The broker makes direct outbound HTTPS calls to `api.github.com` and `api.cloudflare.com` — it does **not** go through the proxy. Routing through the proxy would be circular (proxy fetches creds from broker to authenticate outbound calls).
 
+`stack/broker/audit.js`, baked into the image alongside `server.js`, is a JSONL writer any provider can use: `require("../audit").logEvent("token_issued", { provider: "github" })`. It writes to `AUDIT_LOG` if set and is a silent no-op otherwise, so providers that call it keep working in deployments that have not wired up the `audit-logs` volume. Log the shape of what happened, never a credential value.
+
 ### proxy (`stack/proxy/`)
 
 mitmproxy with addons in `stack/proxy/addons/`, bind-mounted into the container at `/addons/`. `entrypoint.sh` globs `*.py` files from that directory at startup and passes them to `mitmdump` in alphabetical order — dropping a new addon file and restarting the container is sufficient to load it. Numeric prefixes control load order. Current addons:
@@ -70,6 +81,8 @@ mitmproxy with addons in `stack/proxy/addons/`, bind-mounted into the container 
 - **`030_cloudflare.py`** — matches `api.cloudflare.com`. Injects a scoped token. Caller can hint a profile via `X-Cf-Profile` header (stripped before forwarding); defaults to `workers-deploy`.
 
 All addons cache credentials with a 5-minute TTL (`cachetools.TTLCache`). A 401 from GitHub clears the cache immediately.
+
+`stack/proxy/audit.py` is baked into the image at `/opt/agent-proxy` and put on `PYTHONPATH` (see Dockerfile) so any addon — including ones bind-mounted from an example — can `import audit` and call `audit.log_event("blocked", host=host)` regardless of load order. Same no-op-when-`AUDIT_LOG`-unset behavior as the broker's `audit.js`.
 
 ### cred-gateway (`stack/cred-gateway/`)
 
@@ -84,6 +97,20 @@ Both examples vendor `cred-gateway/github.conf`, the counterpart to their `proxy
 Snippets must use exact-match locations (`location = /path`); a prefix match like `location /github/` would expose `/github/token`. The mount source must sit outside whatever is mounted at `/workspace`, or the dev container could widen its own whitelist — `examples/dev-container` mounts `../:/workspace` so it shadows `.devcontainer` with a nested read-only bind to close that.
 
 Everything else returns 403. `/anthropic/key`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the dev container to exfiltrate raw credentials.
+
+cred-gateway also writes a JSON audit line per request (`log_format audit_json` in `nginx.conf`) to `/var/log/audit/cred-gateway.jsonl`, separate from the existing stdout access log. `/healthz` opts out via `access_log off;` in its location block so healthchecks do not spam the trail. Unlike the broker/proxy helpers this is not opt-in: nginx opens configured `access_log` targets at startup and fails hard if the directory is missing, so the Dockerfile bakes in an empty `/var/log/audit` (same "valid unmounted" treatment as `gateway.d`) — the runtime volume mount just shadows it.
+
+### observer (`stack/observer/`)
+
+Node HTTP server on `:9000`, dependency-free like the broker. Polls `/var/log/audit/*.jsonl` every 500ms, broadcasts new lines over SSE at `/events`, and serves a minimal live-stream dashboard at `/`. Keeps a 200-event in-memory backlog so a client that connects mid-run sees recent history immediately.
+
+Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
+
+### log-rotator (`stack/log-rotator/`)
+
+Alpine + `logrotate` + busybox `crond`, mounting `audit-logs` read-write. `entrypoint.sh` runs `mkdir -p /var/log/audit && chmod 1777 /var/log/audit` on every start — idempotent, self-healing — then `crond` runs `logrotate` hourly against `/etc/logrotate.d/audit-logs` (`daily` + `maxsize 50M`, `rotate 14`, `dateext`, `copytruncate`).
+
+Runs as root, unlike every other service in this stack. That's deliberate here, not an oversight: broker (`node`) and proxy (`mitmproxy`) are different non-root uids writing into the same shared directory, and only a root process can reliably chmod it for both and copytruncate files regardless of which uid created them.
 
 ### dev container (`stack/dev/`, `examples/*/dev/`)
 
@@ -117,6 +144,12 @@ Everything else returns 403. `/anthropic/key`, `/github/token`, and `/cloudflare
 **`credential.useHttpPath false` in git config** means one installation token is used for all repos regardless of path. This is intentional — the GitHub App's installation already scopes which repos it can access.
 
 **Do not add `USER mitmproxy` to `proxy/Dockerfile`.** The base image (`mitmproxy/mitmproxy`) ships with a `docker-entrypoint.sh` that runs `usermod` (requires root) to align the `mitmproxy` user's UID with the mounted volume owner, then drops privileges via `gosu mitmproxy`. Adding `USER mitmproxy` makes the entrypoint run as non-root, causing `usermod` to fail with "operation not permitted". The `USER root` + `RUN pip install` block is correct; the entrypoint handles the privilege drop. Proxy stdout is also block-buffered when not attached to a tty — add `-e PYTHONUNBUFFERED=1` or `-it` when testing standalone to see logs in real time.
+
+**`observer` and `log-rotator` deliberately have no `networks:` entry in `compose.yaml`.** Omitting it does not isolate a service by itself — Compose attaches services with no explicit `networks:` to an implicit `default` network — but since every other service (`broker`, `proxy`, `cred-gateway`, `dev`) declares an explicit `networks:` list and never touches `default`, that implicit network ends up containing only `observer` and `log-rotator`, with no route to anything else. They reach `audit-logs` because Docker volumes are not network-scoped, not because they're on `secure` or `dev`. Do not "fix" this by adding a `networks:` entry — that would give `observer`, whose whole job is a host-facing dashboard, a route into `secure`.
+
+**Examples do not pick up `stack/` changes until they repin their build tag.** `stack/broker/audit.js` and `stack/proxy/audit.py` are baked into the image; example provider/addon files under `examples/*/broker/` and `examples/*/proxy/` are bind-mounted at runtime into whatever tag that example's `compose.yaml` builds from (`...git#v1.0.0:stack/broker`). Adding `require("../audit")` or `import audit` to an example's files before a release ships that contains those helpers would `MODULE_NOT_FOUND` at runtime, because the pinned tag predates them. Wire audit-logging calls into example content only after cutting a release and bumping the example's pin — see "examples build from a release tag, not a branch" in `tests/integration/00-config-lint.test.sh`.
+
+**cred-gateway's `access_log` requires the target directory to exist at container start, unlike the broker/proxy `AUDIT_LOG` env vars.** nginx opens every configured `access_log` file during startup and fails hard (`emerg`, refuses to start) if the directory is missing — there's no equivalent to the no-op-when-unset behavior `audit.js`/`audit.py` have, since nginx.conf is static and baked in. That's why `stack/cred-gateway/Dockerfile` bakes in an empty `/var/log/audit` even though the real content lives on the mounted volume.
 
 ## Tests
 

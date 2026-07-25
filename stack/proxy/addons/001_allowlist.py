@@ -33,6 +33,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from mitmproxy import ctx, http
 
+import audit
+
 _ALLOWLIST_PATH = "/etc/agent-allowlist"
 _DEFAULT_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -127,3 +129,4 @@ def request(flow: http.HTTPFlow) -> None:
             {"Content-Type": "application/json"},
         )
         ctx.log.warn(f"allowlist: BLOCKED {method} {host}")
+        audit.log_event("blocked", reason="allowlist", host=host, method=method)

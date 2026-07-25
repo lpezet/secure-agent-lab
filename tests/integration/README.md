@@ -37,6 +37,8 @@ the tier that uses real ones.
 | `30-proxy-allowlist` | yes | Permissive without a file, default-deny with one; per-domain method sets, wildcard matching (and non-matching of sibling domains), inline comments, no spoofing bypass |
 | `40-broker` | yes | `/healthz`, 404 on unknown routes, provider auto-discovery from `PROVIDERS_DIR`, non-`.js` files ignored, no providers baked into the image, runs as non-root |
 | `50-mount-isolation` | yes | `examples/dev-container` mounts `../` read-write; the nested read-only bind must keep `addons/`, `providers/`, `gateway.d/` and `compose.yaml` unwritable while the project stays writable |
+| `60-observer` | yes | Tails a JSONL directory over SSE: existing content, appended lines, a malformed line surfacing instead of crashing the tailer, `copytruncate` rotation followed from offset 0, runs as non-root |
+| `70-log-rotator` | yes | Shipped logrotate config parses clean; entrypoint chmods a root-owned 0755 directory to `1777` on every start (the permission self-heal broker/proxy depend on); runs as root deliberately; `crond` is running |
 
 ## Writing a test
 

@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY server.js ./
+COPY server.js audit.js ./
 # providers/ is bind-mounted at runtime from ./broker/providers — not baked in
 
 USER node

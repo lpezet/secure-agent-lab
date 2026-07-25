@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent stack — audit log</title>
+<style>
+  :root { color-scheme: dark light; }
+  body {
+    margin: 0;
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  #status { font-size: 12px; color: #8b949e; }
+  #status.connected { color: #3fb950; }
+  #status.disconnected { color: #f85149; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 41px;
+    background: #161b22;
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #8b949e;
+    border-bottom: 1px solid #30363d;
+  }
+  tbody td {
+    padding: 4px 10px;
+    border-bottom: 1px solid #161b22;
+    white-space: nowrap;
+  }
+  tbody td.fields { white-space: pre; color: #8b949e; }
+  tr.service-broker td.service { color: #58a6ff; }
+  tr.service-proxy td.service { color: #d29922; }
+  tr.service-cred-gateway td.service { color: #a371f7; }
+  tr.service-observer td.service { color: #f85149; }
+  tr.event-blocked td.event { color: #f85149; }
+</style>
+</head>
+<body>
+<header>
+  <h1>audit log</h1>
+  <span id="status" class="disconnected">connecting…</span>
+</header>
+<table>
+  <thead>
+    <tr><th>time</th><th>service</th><th>event</th><th>fields</th></tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+  const MAX_ROWS = 500;
+  const rows = document.getElementById("rows");
+  const status = document.getElementById("status");
+
+  function addRow(evt) {
+    const tr = document.createElement("tr");
+    tr.className = `service-${evt.service || "?"} event-${evt.event || "?"}`;
+
+    const { ts, service, event, ...rest } = evt;
+    const cells = [
+      ts || "",
+      service || "",
+      event || "",
+      Object.entries(rest).map(([k, v]) => `${k}=${v}`).join(" "),
+    ];
+    for (const [i, text] of cells.entries()) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i === 1) td.className = "service";
+      if (i === 2) td.className = "event";
+      if (i === 3) td.className = "fields";
+      tr.appendChild(td);
+    }
+    rows.prepend(tr);
+    while (rows.children.length > MAX_ROWS) rows.lastChild.remove();
+  }
+
+  function connect() {
+    const es = new EventSource("/events");
+    es.onopen = () => { status.textContent = "connected"; status.className = "connected"; };
+    es.onerror = () => { status.textContent = "disconnected — retrying…"; status.className = "disconnected"; };
+    es.onmessage = (msg) => {
+      try { addRow(JSON.parse(msg.data)); } catch {}
+    };
+  }
+  connect();
+</script>
+</body>
+</html>

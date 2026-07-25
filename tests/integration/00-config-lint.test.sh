@@ -170,4 +170,52 @@ if [ -f "$CC_DOCKERFILE" ] && [ -f "$CC_COMPOSE" ]; then
   fi
 fi
 
+suite "audit-logs volume is wired into stack/compose.yaml"
+conf=stack/compose.yaml
+check_contains "audit-logs volume declared" "$(cat "$conf")" $'  audit-logs:'
+for svc in broker proxy cred-gateway; do
+  block=$(awk -v s="  $svc:" 'index($0,s)==1{f=1;next} f&&/^  [a-zA-Z-]+:/{exit} f' "$conf")
+  check_contains "$svc mounts audit-logs at /var/log/audit" "$block" "audit-logs:/var/log/audit"
+done
+for svc in broker proxy; do
+  block=$(awk -v s="  $svc:" 'index($0,s)==1{f=1;next} f&&/^  [a-zA-Z-]+:/{exit} f' "$conf")
+  check_contains "$svc sets AUDIT_LOG" "$block" "AUDIT_LOG:"
+done
+
+suite "observer and log-rotator stay off secure/dev"
+# Deliberately no `networks:` key for either — see CLAUDE.md. They still land
+# on Compose's implicit `default` network, but every other service declares
+# an explicit `networks:` list and never joins `default`, so that network
+# ends up containing only these two with no route to anything else.
+for svc in observer log-rotator; do
+  block=$(awk -v s="  $svc:" 'index($0,s)==1{f=1;next} f&&/^  [a-zA-Z-]+:/{exit} f' "$conf")
+  check_not_contains "$svc has no explicit networks: key" "$block" "networks:"
+done
+
+suite "observer's dashboard port is loopback-only"
+obs_block=$(awk '/^  observer:/{f=1;next} f&&/^  [a-zA-Z-]+:/{exit} f' "$conf")
+check_contains "observer port bound to 127.0.0.1" "$obs_block" '"127.0.0.1:9000:9000"'
+
+suite "cred-gateway bakes an empty /var/log/audit"
+# Unlike AUDIT_LOG (opt-in, no-op if unset), nginx fails to start if a
+# configured access_log's directory is missing — this must exist unmounted.
+check_contains "cred-gateway Dockerfile creates /var/log/audit" \
+  "$(cat stack/cred-gateway/Dockerfile)" "mkdir -p /var/log/audit"
+
+suite "examples do not yet depend on the stack audit helpers"
+# examples/*/broker and examples/*/proxy are bind-mounted into an image built
+# from a pinned release tag (see "examples build from a release tag" above).
+# audit.js/audit.py are baked into the *current* stack image, not into
+# whatever tag is pinned today, so requiring/importing them from example
+# content would MODULE_NOT_FOUND until a release ships that contains them
+# and the example's pin is bumped. This guards against reintroducing that.
+for f in examples/*/broker/*.js examples/*/.devcontainer/broker/*.js; do
+  [ -f "$f" ] || continue
+  check_not_contains "$f does not require the audit helper" "$(cat "$f")" 'require("../audit")'
+done
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py; do
+  [ -f "$f" ] || continue
+  check_not_contains "$f does not import the audit helper" "$(cat "$f")" "import audit"
+done
+
 finish

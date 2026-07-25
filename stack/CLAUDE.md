@@ -16,7 +16,12 @@ docker compose -f compose.yaml up --build
 docker compose -f compose.yaml logs -f broker proxy cred-gateway
 ```
 
-**Teardown (removes named volumes including the mitmproxy CA cert):**
+**Live audit dashboard (loopback-only — open from the host, not from inside dev):**
+```
+http://localhost:9000
+```
+
+**Teardown (removes named volumes including the mitmproxy CA cert and the audit-logs history):**
 ```bash
 docker compose -f compose.yaml down -v
 ```
