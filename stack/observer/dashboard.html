@@ -22,6 +22,18 @@
   #status { font-size: 12px; color: #8b949e; }
   #status.connected { color: #3fb950; }
   #status.disconnected { color: #f85149; }
+  #clear {
+    margin-left: auto;
+    font: inherit;
+    font-size: 12px;
+    background: #21262d;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+  #clear:hover { background: #30363d; }
   table { width: 100%; border-collapse: collapse; }
   thead th {
     position: sticky; top: 41px;
@@ -50,6 +62,7 @@
 <header>
   <h1>audit log</h1>
   <span id="status" class="disconnected">connecting…</span>
+  <button id="clear" title="Clears the display only — audit-logs on disk are untouched">Clear</button>
 </header>
 <table>
   <thead>
@@ -61,6 +74,18 @@
   const MAX_ROWS = 500;
   const rows = document.getElementById("rows");
   const status = document.getElementById("status");
+  const clearBtn = document.getElementById("clear");
+
+  // Display-only clear: the server's backlog (replayed to any new/reconnecting
+  // client so it always has recent history) is untouched, and so are the
+  // files on disk. Tracking the cutoff by event time, not just wiping the
+  // DOM once, means a later reconnect (network blip, tab reload) replaying
+  // that backlog doesn't silently bring old rows back.
+  let clearedAt = null;
+  clearBtn.addEventListener("click", () => {
+    rows.innerHTML = "";
+    clearedAt = new Date();
+  });
 
   function addRow(evt) {
     const tr = document.createElement("tr");
@@ -90,7 +115,11 @@
     es.onopen = () => { status.textContent = "connected"; status.className = "connected"; };
     es.onerror = () => { status.textContent = "disconnected — retrying…"; status.className = "disconnected"; };
     es.onmessage = (msg) => {
-      try { addRow(JSON.parse(msg.data)); } catch {}
+      try {
+        const evt = JSON.parse(msg.data);
+        if (clearedAt && evt.ts && new Date(evt.ts) <= clearedAt) return;
+        addRow(evt);
+      } catch {}
     };
   }
   connect();
