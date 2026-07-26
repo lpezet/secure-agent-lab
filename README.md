@@ -1,4 +1,4 @@
-# Secure Autonomous Agents
+# Secure Agent Lab
 
 Docker infrastructure for running autonomous agents (e.g. Claude Code) without exposing
 long-lived credentials to the agent's process. Outbound HTTPS is intercepted by mitmproxy,

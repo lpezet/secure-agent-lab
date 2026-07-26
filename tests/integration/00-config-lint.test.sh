@@ -130,7 +130,7 @@ suite "examples build from a release tag, not a branch"
 # exactly what the 0.1.0 upgrade notes warn about, so the examples must not
 # reproduce it. Bump these when cutting a release.
 for c in examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml; do
-  refs=$(grep -oE 'secure-autonomous-agents\.git#[^:]+' "$c" | cut -d'#' -f2 | sort -u)
+  refs=$(grep -oE 'secure-agent-lab\.git#[^:]+' "$c" | cut -d'#' -f2 | sort -u)
   if [ -z "$refs" ]; then
     skip "$c — no git-URL builds" ""
   else
@@ -230,7 +230,7 @@ EXAMPLE_DIRS=(examples/claude-code examples/dev-container/.devcontainer)
 for i in "${!EXAMPLE_COMPOSES[@]}"; do
   c="${EXAMPLE_COMPOSES[$i]}"
   dir="${EXAMPLE_DIRS[$i]}"
-  tag=$(grep -oE 'secure-autonomous-agents\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
+  tag=$(grep -oE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
   if [ -z "$tag" ]; then skip "$dir — no pinned tag found" ""; continue; fi
 
   higher=$(printf '%s\n%s\n' "$AUDIT_MIN" "$tag" | sort -V | tail -1)

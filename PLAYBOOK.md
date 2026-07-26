@@ -2,7 +2,7 @@
 
 Instructions for an AI agent — not a human reader — working in an
 end-user's own project, to generate, extend, and upgrade a deployment of
-the secure-autonomous-agents stack. This file does not assume the agent
+the secure-agent-lab stack. This file does not assume the agent
 has read this repo's `CLAUDE.md`, and it shouldn't: that file is scoped to
 developing and maintaining this repo itself, not to using it. `README.md`
 and `examples/` are for anyone to read; nothing here depends on them, but
@@ -11,7 +11,7 @@ browsing them is fine.
 Fetch and follow this file at a pinned tag, e.g.:
 
 ```
-https://raw.githubusercontent.com/lpezet/secure-autonomous-agents/refs/tags/vX.Y.Z/PLAYBOOK.md
+https://raw.githubusercontent.com/lpezet/secure-agent-lab/refs/tags/vX.Y.Z/PLAYBOOK.md
 ```
 
 The stack this playbook generates pins `stack/` at the same tag, the same
