@@ -56,8 +56,8 @@ set -a; . "$E2E_DIR/.env"; set +a
 for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
   [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
 done
-if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
-  skip_tier "set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in tests/e2e/.env"
+if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
+  skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
 fi
 
 if ! docker version >/dev/null 2>&1; then

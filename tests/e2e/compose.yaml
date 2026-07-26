@@ -24,6 +24,8 @@ services:
     env_file: .env
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
+      ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
+      ANTHROPIC_AUTH_TOKEN_PATH: /secrets/anthropic-auth.token
     networks: [secure]
     healthcheck:
       test:
