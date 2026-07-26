@@ -6,23 +6,26 @@ Code cannot exfiltrate credentials even if it tries.
 
 ## Prerequisites
 
-### Credentials
-
-The GitHub App private key must be a file (it's a PEM cert):
+### Credential files
 
 ```bash
 mkdir -p ~/.config/agent-creds && chmod 700 ~/.config/agent-creds
+
 cp /path/to/your-app.private-key.pem ~/.config/agent-creds/github-app.pem
+printf 'sk-ant-...' > ~/.config/agent-creds/anthropic.key
+# or, to use an OAuth token instead (avoids API-tier rate limits):
+# printf 'sk-ant-oat01-...' > ~/.config/agent-creds/anthropic-auth.token
 chmod 600 ~/.config/agent-creds/*
 ```
 
-The Anthropic API key goes in `.env` and is read directly by the broker — it never reaches
-the agent container:
+These are read directly by the broker — they never reach the agent container.
+
+### `.env`
 
 ```bash
 cd examples/claude-code
 cp .env.example .env
-# fill in GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, and ANTHROPIC_API_KEY
+# fill in GITHUB_APP_ID and GITHUB_APP_INSTALLATION_ID
 ```
 
 ## Quick start
@@ -94,7 +97,7 @@ docker compose exec dev /setup.sh
 **Restart after rotating a credential:**
 ```bash
 docker compose up -d --force-recreate broker          # GitHub App private key (replace file, then restart)
-# Anthropic key: edit ANTHROPIC_API_KEY in .env, then:
+# Anthropic key/token: replace the file under ~/.config/agent-creds/, then:
 docker compose up -d --force-recreate broker proxy    # proxy restart needed — it caches the key for 5 min
 ```
 
