@@ -56,6 +56,20 @@ On startup `dev/entrypoint.sh` calls `setup.sh`, which:
 3. Verifies the broker is unreachable (security boundary check)
 4. Fetches the GitHub App identity and writes `git config user.name/email`
 
+## Audit logging
+
+`broker` and `proxy` are built from a stack image (`v1.2.0`) that includes the audit
+helpers (`audit.js`/`audit.py`), and this example's own provider/addon files call them —
+that's what lets `broker`/`proxy`/`cred-gateway` write a structured, secret-free JSONL
+trail of what got injected, blocked, or issued. But unlike `examples/dev-container`, this
+example does not mount the shared `audit-logs` volume or run `observer`/`log-rotator`, so
+those calls are no-ops here: nothing to wire up, and no dashboard.
+
+That's a real deployment choice, not a partial upgrade — the helpers are opt-in and
+silently do nothing without `AUDIT_LOG` set (see `CLAUDE.md`). If you want the live
+dashboard, copy the `audit-logs` volume, the `AUDIT_LOG` env vars, and the
+`observer`/`log-rotator` services from `examples/dev-container/.devcontainer/compose.yaml`.
+
 ## Attach
 
 Once setup completes, attach an interactive Claude Code session:

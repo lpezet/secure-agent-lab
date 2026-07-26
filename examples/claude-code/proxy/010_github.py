@@ -9,6 +9,8 @@ import requests
 from mitmproxy import http, ctx
 from cachetools import TTLCache
 
+import audit
+
 _cache = TTLCache(maxsize=1, ttl=300)
 BROKER_URL = "http://broker:8080"
 
@@ -37,6 +39,7 @@ def request(flow: http.HTTPFlow) -> None:
     )
 
     ctx.log.info(f"github: {flow.request.method} {host}{flow.request.path}")
+    audit.log_event("token_injected", provider="github", host=host, method=flow.request.method)
 
 
 def response(flow: http.HTTPFlow) -> None:
@@ -45,3 +48,4 @@ def response(flow: http.HTTPFlow) -> None:
     if flow.response.status_code == 401:
         _cache.clear()
         ctx.log.warn("github: 401 received, cleared token cache")
+        audit.log_event("cache_cleared", provider="github", reason="401")

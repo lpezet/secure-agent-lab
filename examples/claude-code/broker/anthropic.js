@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { logEvent } = require("../audit");
 
 function tryReadFile(path) {
   if (!path) return null;
@@ -20,11 +21,13 @@ module.exports = {
     const authToken = tryReadFile(process.env.ANTHROPIC_AUTH_TOKEN_PATH);
     if (authToken) {
       console.log("[broker] issued anthropic auth token to proxy");
+      logEvent("cred_issued", { provider: "anthropic", cred_type: "auth_token" });
       return send(200, { type: "auth_token", value: authToken });
     }
     const apiKey = tryReadFile(process.env.ANTHROPIC_API_KEY_PATH);
     if (apiKey) {
       console.log("[broker] issued anthropic api key to proxy");
+      logEvent("cred_issued", { provider: "anthropic", cred_type: "api_key" });
       return send(200, { type: "api_key", value: apiKey });
     }
     send(500, { error: "no Anthropic credential configured" });
