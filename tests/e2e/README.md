@@ -43,7 +43,10 @@ it on one throwaway repository, download the private key.
 ```bash
 mkdir -p ~/.config/agent-creds-e2e
 cp ~/Downloads/<your-test-app>.private-key.pem ~/.config/agent-creds-e2e/github-app.pem
-chmod 600 ~/.config/agent-creds-e2e/github-app.pem
+printf 'sk-ant-...' > ~/.config/agent-creds-e2e/anthropic.key
+# or, to use an OAuth token instead (wins if both files exist):
+# printf 'sk-ant-oat01-...' > ~/.config/agent-creds-e2e/anthropic-auth.token
+chmod 600 ~/.config/agent-creds-e2e/*
 ```
 
 **2. `.env`.**
@@ -53,9 +56,10 @@ cp tests/e2e/.env.example tests/e2e/.env
 $EDITOR tests/e2e/.env
 ```
 
-The Anthropic credential goes in `.env`, not in the creds directory — the
-reference `providers/anthropic.js` reads it from the environment. Only
-`github-app.pem` is a file.
+Only `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and `E2E_TEST_REPO` go in
+`.env`. The Anthropic credential is a file in the creds directory, same as
+`github-app.pem` — the reference `providers/anthropic.js` reads it from disk,
+never from the environment.
 
 Override the directory with `AGENT_CREDS_DIR` if you keep it elsewhere.
 `run.sh` refuses outright to run against `~/.config/agent-creds`: this tier
