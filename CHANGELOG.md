@@ -8,6 +8,42 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.3.0 — 2026-07-26
+
+### Changed
+
+**Repo renamed: `secure-autonomous-agents` → `secure-agent-lab`.** No code or
+security-boundary changes — purely a rename, done directly on GitHub. Every reference is
+updated: this repo's own build URLs (`examples/*/compose.yaml`), `PLAYBOOK.md`'s stack name
+and pinned-tag fetch URL, the README title, and the `tests/integration/00-config-lint.test.sh`
+regexes that parse those build URLs.
+
+**Upgrading:** update your local git remote —
+
+```bash
+git remote set-url origin git@github.com:lpezet/secure-agent-lab.git
+```
+
+GitHub redirects the old URL for now, but don't rely on that indefinitely. If your own
+deployment's `compose.yaml` builds `stack/*` from this repo's git URL directly, point it at
+`secure-agent-lab.git#vX.Y.Z` on your next repin.
+
+### Added
+
+**`examples/claude-code` repinned from `v1.0.0` to `v1.2.0`.** No `stack/` security behavior
+changed in that range — `v1.0.0` already carries the `1.0.0` security fixes, and everything
+since is the audit-logging feature added in `1.1.0`. This example's own `broker`/`proxy` files
+now call the audit helpers (`require("../audit")`/`import audit`), as required once pinned
+that high. Unlike `dev-container`, it deliberately does not wire up the `audit-logs` volume or
+the `observer`/`log-rotator` services — the calls are no-ops here by design (documented as
+safe in `CLAUDE.md`). See `examples/claude-code/README.md`'s new "Audit logging" section for
+how to add the live dashboard if you want it.
+
+No upgrade steps for this part: additive only, and the calls are no-ops without `AUDIT_LOG`
+set.
+
+---
+
 ## 1.2.0 — 2026-07-26
 
 ### Added
