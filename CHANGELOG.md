@@ -8,6 +8,23 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.2.0 — 2026-07-26
+
+### Added
+
+**`PLAYBOOK.md`: the end-user-facing entry point for deploying and extending the stack.**
+`CLAUDE.md` had accumulated both maintainer-only content (how this repo's own services are
+built, tested, and released) and end-user content (how to generate a deployment, add a
+credential provider, upgrade between versions) in one file scoped to developing this repo.
+That end-user-facing material — generation constraints, the Known Providers reference, and
+"Adding a credential provider to an existing stack" — now lives in `PLAYBOOK.md` instead.
+`CLAUDE.md`'s overlapping invariants and provider section are trimmed to point there, keeping
+only the maintainer-only bits (how `stack/`'s own services are wired, tested, and released).
+
+No upgrade steps: this is a documentation reorganization with no code changes.
+
+---
+
 ## 1.1.3 — 2026-07-26
 
 ### Fixed
