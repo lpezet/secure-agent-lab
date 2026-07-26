@@ -3,7 +3,7 @@
 # Deliberately NOT examples/claude-code/compose.yaml, for one reason that
 # matters: that file builds from
 #
-#   build: https://github.com/lpezet/secure-autonomous-agents.git#main:stack/broker
+#   build: https://github.com/lpezet/secure-agent-lab.git#main:stack/broker
 #
 # so running it would certify whatever is on main, not the tree you are sitting
 # on. Every build here is a local path, so e2e tests the code you are about to
