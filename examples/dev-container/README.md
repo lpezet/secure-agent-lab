@@ -33,6 +33,17 @@ VSCode runs `setup.sh` (on create) and `setup-start.sh` (on each start), which i
 mitmproxy CA cert, wire git credentials, verify the security boundary, and set git identity
 from the GitHub App.
 
+## Audit log dashboard
+
+`broker`, `proxy`, and `cred-gateway` write a structured, secret-free JSONL trail to a shared
+volume; `observer` serves a live view of it and `log-rotator` keeps it bounded. VS Code forwards
+the dashboard's port automatically — look for **Audit log dashboard** in the **Ports** tab, or
+open it directly:
+
+```
+http://localhost:9000
+```
+
 ## Commands
 
 All commands run from `examples/dev-container/`.

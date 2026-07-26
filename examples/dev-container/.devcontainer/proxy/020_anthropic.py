@@ -3,6 +3,8 @@ import requests
 from mitmproxy import http, ctx
 from cachetools import TTLCache
 
+import audit
+
 _cache = TTLCache(maxsize=1, ttl=300)
 BROKER_URL = "http://broker:8080"
 
@@ -31,6 +33,7 @@ def request(flow: http.HTTPFlow) -> None:
             {"Content-Type": "application/json"},
         )
         ctx.log.warn(f"anthropic: BLOCKED {flow.request.method} {flow.request.path}")
+        audit.log_event("blocked", provider="anthropic", reason="admin_api", path=flow.request.path)
         return
 
     flow.request.headers["x-api-key"] = _get_key()
@@ -41,6 +44,10 @@ def request(flow: http.HTTPFlow) -> None:
         del flow.request.headers["Authorization"]
 
     ctx.log.info(f"anthropic: {flow.request.method} {flow.request.path}")
+    audit.log_event(
+        "cred_injected", provider="anthropic", cred_type="api_key",
+        method=flow.request.method, path=flow.request.path,
+    )
 
 
 def responseheaders(flow: http.HTTPFlow) -> None:

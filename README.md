@@ -93,9 +93,9 @@ injected, blocked, or issued, never a credential value — to a shared `audit-lo
 from the host, not from `dev` or `secure`, so it cannot become a new channel between the two).
 `log-rotator` keeps the files bounded with `logrotate`.
 
-Available today in `stack/compose.yaml` — see `stack/CLAUDE.md` for a smoke-test walkthrough
-that needs no real credentials. Not yet wired into the examples below; that lands at the next
-release.
+Available in `stack/compose.yaml` (see `stack/CLAUDE.md` for a smoke-test walkthrough that
+needs no real credentials) and in the VS Code dev container example below. Not yet wired into
+`examples/claude-code` — pending its own repin to a release that carries this.
 
 ## Quick start
 

@@ -8,6 +8,24 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.1.1 — 2026-07-26
+
+### Added
+
+**`examples/dev-container` now has the audit-log dashboard.** Repinned `broker`/`proxy`/
+`cred-gateway` from `#v1.0.0` to `#v1.1.0` and added `observer`/`log-rotator`, same as
+`stack/compose.yaml`. This example's own provider/addon files now call `logEvent`/
+`audit.log_event` too, so real events (token issuance, injected credentials, policy blocks)
+show up in the dashboard, not just cred-gateway's request log. VS Code forwards the dashboard
+port automatically, labeled "Audit log dashboard" in the Ports tab.
+
+`examples/claude-code` is unaffected — still on `v1.0.0`, to be repinned in a later release.
+
+No upgrade steps: existing `examples/dev-container` deployments pick this up on their next
+`docker compose up --build`, and every new env var/volume mount is additive.
+
+---
+
 ## 1.1.0 — 2026-07-26
 
 ### Added

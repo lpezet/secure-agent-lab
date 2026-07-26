@@ -1,6 +1,7 @@
 const fs = require("fs");
 const https = require("https");
 const { createAppAuth } = require("@octokit/auth-app");
+const { logEvent } = require("../audit");
 
 const SAFETY_WINDOW_MS = 5 * 60 * 1000;
 
@@ -83,18 +84,21 @@ module.exports = {
   "/github/token": async (url, send) => {
     const t = await mintGitHubToken();
     console.log(`[broker] issued github token (expires ${t.expiresAt})`);
+    logEvent("token_issued", { provider: "github" });
     send(200, t);
   },
 
   "/github/credential": async (url, send) => {
     const t = await mintGitHubToken();
     console.log(`[broker] issued github credential (expires ${t.expiresAt})`);
+    logEvent("credential_issued", { provider: "github" });
     send(200, `username=x-access-token\npassword=${t.token}\n`, "text/plain");
   },
 
   "/github/identity": async (url, send) => {
     const id = await getGitHubIdentity();
     console.log(`[broker] issued github identity ${id.name}`);
+    logEvent("identity_issued", { provider: "github", name: id.name });
     send(200, id);
   },
 };

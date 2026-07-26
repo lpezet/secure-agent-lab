@@ -1,5 +1,6 @@
 const fs = require("fs");
 const https = require("https");
+const { logEvent } = require("../audit");
 
 const SAFETY_WINDOW_MS = 5 * 60 * 1000;
 const cloudflareTokenCache = new Map();
@@ -93,6 +94,7 @@ module.exports = {
     console.log(
       `[broker] issued cloudflare token profile=${profile} (expires ${t.expiresAt})`,
     );
+    logEvent("token_issued", { provider: "cloudflare", profile });
     send(200, t);
   },
 };
