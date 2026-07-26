@@ -7,7 +7,8 @@ which injects credentials fetched from a broker the agent cannot reach directly.
 ## Repository structure
 
 ```
-stack/          Core reusable infrastructure (broker, proxy, cred-gateway, base dev image)
+stack/          Core reusable infrastructure (broker, proxy, cred-gateway, observer,
+                log-rotator, base dev image)
 examples/
   dev-container/   VS Code dev container — open any repo in a secured workspace
   claude-code/     Claude Code in a secured container — attach and use interactively
@@ -83,6 +84,18 @@ exposing them would let the dev container exfiltrate real secrets directly.
 
 In short: the **proxy** handles API traffic via token injection; **cred-gateway** handles git's
 credential helper via a tightly scoped nginx whitelist.
+
+### Audit logging
+
+broker, proxy, and cred-gateway each write a structured, secret-free JSONL trail — what got
+injected, blocked, or issued, never a credential value — to a shared `audit-logs` volume.
+`observer` tails it and serves a live view at `http://localhost:9000` (loopback-only: viewable
+from the host, not from `dev` or `secure`, so it cannot become a new channel between the two).
+`log-rotator` keeps the files bounded with `logrotate`.
+
+Available today in `stack/compose.yaml` — see `stack/CLAUDE.md` for a smoke-test walkthrough
+that needs no real credentials. Not yet wired into the examples below; that lands at the next
+release.
 
 ## Quick start
 
@@ -219,3 +232,6 @@ docker compose up -d --force-recreate proxy
   the API but cannot enumerate or manage org resources.
 - The broker never routes through the proxy. It makes direct HTTPS calls to `api.github.com`
   and `api.cloudflare.com`. Routing through the proxy would be circular.
+- `observer` and `log-rotator` have no `secure`/`dev` network membership — they reach the
+  `audit-logs` volume without joining either, so the audit trail cannot become a new channel
+  between the two.

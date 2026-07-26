@@ -56,3 +56,18 @@ docker compose -f compose.yaml up -d --force-recreate broker
 
 Adding a provider end to end — env var, provider file, proxy addon, tests — is
 covered in the repo root [`CLAUDE.md`](../../../CLAUDE.md).
+
+## Audit logging
+
+`audit.js`, baked into the image alongside `server.js`, is a JSONL writer any
+provider can use:
+
+```js
+const { logEvent } = require("../audit");
+logEvent("token_issued", { provider: "github", cache: "hit" });
+```
+
+It writes to `AUDIT_LOG` if that env var is set, and is a silent no-op if it
+isn't — so providers that skip it keep working in deployments that haven't
+wired up the `audit-logs` volume. Log the shape of what happened (provider,
+route, cache state), never a credential value.

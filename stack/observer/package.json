@@ -1,0 +1,9 @@
+{
+  "name": "agent-observer",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

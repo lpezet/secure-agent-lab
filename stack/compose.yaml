@@ -24,11 +24,13 @@ services:
     volumes:
       - ${HOME}/.config/agent-creds:/secrets:ro
       - ./broker/providers:/app/providers:ro
+      - audit-logs:/var/log/audit
     env_file: .env
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
       ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
       CLOUDFLARE_MINTER_TOKEN_PATH: /secrets/cloudflare-minter.token
+      AUDIT_LOG: /var/log/audit/broker.jsonl
     networks: [secure]
     healthcheck:
       test:
@@ -52,10 +54,12 @@ services:
     volumes:
       - ./proxy/addons:/addons:ro
       - proxy-certs:/home/mitmproxy/.mitmproxy
+      - audit-logs:/var/log/audit
       # Uncomment the line below to enable proxy allowlist
       # - ./proxy/allowlist:/etc/agent-allowlist:ro
     environment:
       BROKER_URL: http://broker:8080
+      AUDIT_LOG: /var/log/audit/proxy.jsonl
     networks: [secure, dev]
     healthcheck:
       test:
@@ -78,6 +82,7 @@ services:
       # Extra whitelisted endpoints for custom providers. Host path only —
       # must not be visible to the dev container.
       - ./cred-gateway/gateway.d:/etc/nginx/gateway.d:ro
+      - audit-logs:/var/log/audit
     networks: [secure, dev]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
@@ -85,6 +90,41 @@ services:
       timeout: 3s
       retries: 5
       start_period: 3s
+    restart: unless-stopped
+
+  # Reads the audit-logs volume and serves a live view of it on :9000. Not on
+  # the `secure` or `dev` network (no `networks:` key — see CLAUDE.md), and
+  # its published port is loopback-only: viewable from the host, not from
+  # anywhere inside the stack.
+  observer:
+    build: ./observer
+    volumes:
+      - audit-logs:/var/log/audit:ro
+    ports:
+      - "127.0.0.1:9000:9000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:9000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Rotates the JSONL files on the shared volume (logrotate + copytruncate,
+  # see stack/log-rotator/logrotate.conf) and fixes up the volume's
+  # permissions on every start so broker (`node`) and proxy (`mitmproxy`) —
+  # different non-root uids sharing one directory — can both write to it.
+  # Runs as root for exactly that reason; needs no network of its own either.
+  log-rotator:
+    build: ./log-rotator
+    volumes:
+      - audit-logs:/var/log/audit
     restart: unless-stopped
 
   dev:
@@ -119,3 +159,4 @@ networks:
 
 volumes:
   proxy-certs:
+  audit-logs:
