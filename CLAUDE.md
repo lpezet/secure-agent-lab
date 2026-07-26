@@ -129,23 +129,23 @@ Runs as root, unlike every other service in this stack. That's deliberate here, 
 
 ## Non-obvious invariants
 
-**Never use `flow.request.pretty_host` for a security decision in an addon.** It prefers the client-supplied `Host` header, which the dev container fully controls, while mitmproxy connects to `flow.request.host` (absolute-form URI, CONNECT authority, or TLS SNI). Every addon originally matched `pretty_host`, which meant `curl --proxy http://proxy:8080 -H 'Host: api.anthropic.com' http://my-server/` made the proxy inject the real Anthropic key into a request delivered to `my-server`, and `-H 'Host: anything'` walked `000_policy.py` straight through to `broker:8080/github/token`. Always match on `flow.request.host`. `tests/integration/20`, `25` and `30` cover each addon.
+**Never use `flow.request.pretty_host` for a security decision in an addon** — see `PLAYBOOK.md`'s generation constraints for the rule (match `flow.request.host` instead). Concretely, every addon originally matched `pretty_host`, which meant `curl --proxy http://proxy:8080 -H 'Host: api.anthropic.com' http://my-server/` made the proxy inject the real Anthropic key into a request delivered to `my-server`, and `-H 'Host: anything'` walked `000_policy.py` straight through to `broker:8080/github/token`. `tests/integration/20`, `25` and `30` cover each addon against regressing on this.
 
-**`GH_TOKEN=proxy-injected` and `CLOUDFLARE_API_TOKEN=proxy-injected` are dummy values.** They exist to satisfy client-side "am I authenticated?" checks in `gh` and `wrangler`. The proxy strips them at the wire level and injects real tokens. Do not replace them with real values — the whole point is that dev never holds real credentials.
+**`GH_TOKEN=proxy-injected` and `CLOUDFLARE_API_TOKEN=proxy-injected` are dummy values, never real ones** — see `PLAYBOOK.md`'s Known Providers / generation constraints for why.
 
-**`010_github.py` must not match `github.com`.** Git push/pull to `github.com` goes through the HTTPS credential helper (via cred-gateway), not through token injection. Adding `github.com` to the addon would conflict with git's HTTP Basic auth handshake inside the MITMed tunnel.
+**`010_github.py` must not match `github.com`** — see `PLAYBOOK.md`'s GitHub section for why (conflicts with git's own Basic-auth handshake inside the MITM'd tunnel for push/pull).
 
-**`020_anthropic.py` uses `responseheaders`, not `response`.** Accessing `flow.response.content` for a streamed response would buffer the entire body. The addon sets `flow.response.stream = True` in `responseheaders` so SSE chunks pass through immediately.
+**`020_anthropic.py` uses `responseheaders`, not `response`** — see `PLAYBOOK.md`'s Anthropic section for why (avoids buffering streamed SSE responses).
 
 **The broker's `identityCache` is lifetime-cached.** If the GitHub App is renamed, restart the broker to refresh it. All other caches are TTL-based (5 minutes).
 
 **CA cert persistence.** The mitmproxy CA cert lives in the `proxy-certs` named Docker volume, shared between the `proxy` container (where it's generated) and the `dev` container (read-only). The proxy's healthcheck gates on the cert file existing, so `postCreateCommand` cannot race cert generation. Removing the volume forces cert regeneration and requires a container rebuild.
 
-**`credential.useHttpPath false` in git config** means one installation token is used for all repos regardless of path. This is intentional — the GitHub App's installation already scopes which repos it can access.
+**`credential.useHttpPath false` in git config** is intentional, not a bug — see `PLAYBOOK.md`'s GitHub section for why.
 
-**Do not add `USER mitmproxy` to `proxy/Dockerfile`.** The base image (`mitmproxy/mitmproxy`) ships with a `docker-entrypoint.sh` that runs `usermod` (requires root) to align the `mitmproxy` user's UID with the mounted volume owner, then drops privileges via `gosu mitmproxy`. Adding `USER mitmproxy` makes the entrypoint run as non-root, causing `usermod` to fail with "operation not permitted". The `USER root` + `RUN pip install` block is correct; the entrypoint handles the privilege drop. Proxy stdout is also block-buffered when not attached to a tty — add `-e PYTHONUNBUFFERED=1` or `-it` when testing standalone to see logs in real time.
+**Do not add `USER mitmproxy` to `proxy/Dockerfile`** — see `PLAYBOOK.md`'s generation constraints for the rule. Mechanism: the base image (`mitmproxy/mitmproxy`) ships a `docker-entrypoint.sh` that runs `usermod` (requires root) to align the `mitmproxy` user's UID with the mounted volume owner, then drops privileges via `gosu mitmproxy`. Adding `USER mitmproxy` makes the entrypoint run as non-root, causing `usermod` to fail with "operation not permitted". The `USER root` + `RUN pip install` block is correct; the entrypoint handles the privilege drop. Proxy stdout is also block-buffered when not attached to a tty — add `-e PYTHONUNBUFFERED=1` or `-it` when testing standalone to see logs in real time.
 
-**`observer` and `log-rotator` deliberately have no `networks:` entry in `compose.yaml`.** Omitting it does not isolate a service by itself — Compose attaches services with no explicit `networks:` to an implicit `default` network — but since every other service (`broker`, `proxy`, `cred-gateway`, `dev`) declares an explicit `networks:` list and never touches `default`, that implicit network ends up containing only `observer` and `log-rotator`, with no route to anything else. They reach `audit-logs` because Docker volumes are not network-scoped, not because they're on `secure` or `dev`. Do not "fix" this by adding a `networks:` entry — that would give `observer`, whose whole job is a host-facing dashboard, a route into `secure`.
+**`observer` and `log-rotator` deliberately have no `networks:` entry in `compose.yaml`** — see `PLAYBOOK.md`'s generation constraints for the mechanism and why not to "fix" it.
 
 **Examples do not pick up `stack/` changes until they repin their build tag.** `stack/broker/audit.js` and `stack/proxy/audit.py` are baked into the image; example provider/addon files under `examples/*/broker/` and `examples/*/proxy/` are bind-mounted at runtime into whatever tag that example's `compose.yaml` builds from (`...git#vX.Y.Z:stack/broker`). Adding `require("../audit")` or `import audit` to an example's files before its pin reaches the release that introduced those helpers (1.1.0) would `MODULE_NOT_FOUND` at runtime. `examples/dev-container` is pinned to 1.1.0 and does call the helpers; `examples/claude-code` is still on 1.0.0 and must not, until it's repinned. `tests/integration/00-config-lint.test.sh` derives this per example from its actual pinned tag rather than a hardcoded list, so it keeps working unattended as each example upgrades in turn.
 
@@ -162,12 +162,12 @@ A bare `tests/run.sh` runs integration only — e2e must be asked for by name (`
 
 ## Adding a new credential provider
 
-1. Add a credential file path env var under `broker` in the relevant `compose.yaml`
-2. Add a provider file in `stack/broker/providers/` (follow existing pattern; expose via cred-gateway only if dev tools need raw access — almost never). Restart the broker to pick it up.
-3. Add a numbered addon in `stack/proxy/addons/` following the `020_anthropic.py` or `030_cloudflare.py` pattern
-4. Restart the proxy — `entrypoint.sh` auto-discovers `*.py` files in `/addons/` at startup, no Dockerfile change needed
-5. Add a smoke-test section verifying injection works AND the broker endpoint is unreachable from dev
-6. Add coverage in `tests/` — at minimum a spoofed-`Host` case proving the new addon does not inject for any host but the genuine one
+The mechanics — which file goes where, restart order, generation-time constraints like host-matching and exact-match locations — are documented once, for maintainers and end-users alike, in `PLAYBOOK.md` under "Adding a credential provider to an existing stack". Follow that rather than duplicating it here.
+
+Maintainer-only steps on top of it, when the provider is being added to `stack/` itself rather than an end-user's deployment:
+
+1. Add a credential file path env var under `broker` in the relevant `compose.yaml`.
+2. Add coverage in `tests/` — at minimum a spoofed-`Host` case proving the new addon does not inject for any host but the genuine one.
 
 ## Release process
 
