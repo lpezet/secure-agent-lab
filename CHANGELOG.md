@@ -8,6 +8,20 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.1.2 — 2026-07-26
+
+### Added
+
+**Documented the release-branch process in `CLAUDE.md`.** No code changes. Writes down the
+process used for `1.1.0` through this release: every release branch cuts from `main`, both the
+next patch and next minor branches get cut immediately after each tag, and — the step that
+keeps them from silently diverging — `main` gets merged into every other still-open release
+branch right after a release ships.
+
+No upgrade steps.
+
+---
+
 ## 1.1.1 — 2026-07-26
 
 ### Added
