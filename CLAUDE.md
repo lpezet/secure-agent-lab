@@ -168,3 +168,21 @@ A bare `tests/run.sh` runs integration only — e2e must be asked for by name (`
 4. Restart the proxy — `entrypoint.sh` auto-discovers `*.py` files in `/addons/` at startup, no Dockerfile change needed
 5. Add a smoke-test section verifying injection works AND the broker endpoint is unreachable from dev
 6. Add coverage in `tests/` — at minimum a spoofed-`Host` case proving the new addon does not inject for any host but the genuine one
+
+## Release process
+
+Every release branch is cut from `main`, never from another release branch. Right after tagging `vX.Y.Z` on `main`, immediately cut both of the next branches it could need, so work always has a release branch to target instead of `main` directly — the standing branch is what makes "target the release branch, not main" the default instead of something to remember:
+
+- `release/X.Y.(Z+1)` — the next patch. Cheap to create; makes it that much quicker to start a hotfix.
+- `release/X.(Y+1).0` — the next minor.
+
+Both branch off `main` at the tag. Feature/fix branches then target whichever release branch fits (`fix/*` off the patch branch, `feature/*` off the minor branch), not `main`.
+
+When a release branch is ready:
+
+1. Add a `CHANGELOG.md` entry directly on the release branch (see existing entries for format — this project versions the security boundary, not the code, so most entries need no "Upgrading" section).
+2. Open a PR from the release branch into `main`, get it reviewed, merge it.
+3. Tag `vX.Y.Z` on `main`.
+4. **Sync every other still-open release branch by merging `main` into it.** This is the step that makes the standing-branch approach safe: without it, a fix that lands via the patch branch never reaches the minor branch, which is the same "forgot where to land it" risk one level up, just moved from branch-creation-time to release-time.
+
+Worked example from `v1.1.0` → `v1.1.1`: `release/1.1.1` and `release/1.2.0` were cut from `main` right after tagging `v1.1.0`. A fix (`fix/dev-container-observer`) targeted `release/1.1.1`, not `main`. Once that PR merged into `release/1.1.1`, a CHANGELOG entry went straight on `release/1.1.1`, that branch PR'd into `main`, and `main` got tagged `v1.1.1`. Immediately after, `main` was merged into `release/1.2.0` so the still-open minor branch picked up the fix too.
