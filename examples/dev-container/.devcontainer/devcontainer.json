@@ -7,6 +7,10 @@
   "postCreateCommand": "/workspace/.devcontainer/dev/setup.sh",
   "postStartCommand": "/workspace/.devcontainer/dev/setup-start.sh",
   "remoteUser": "node",
+  "forwardPorts": [9000],
+  "portsAttributes": {
+    "9000": { "label": "Audit log dashboard", "onAutoForward": "silent" }
+  },
   "customizations": {
     "vscode": {
       "extensions": ["anthropic.claude-code"]

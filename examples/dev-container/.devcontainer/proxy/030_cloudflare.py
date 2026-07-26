@@ -3,6 +3,8 @@ import requests
 from mitmproxy import http, ctx
 from cachetools import TTLCache
 
+import audit
+
 _cache = TTLCache(maxsize=4, ttl=300)
 BROKER_URL = "http://broker:8080"
 DEFAULT_PROFILE = "workers-deploy"
@@ -31,4 +33,8 @@ def request(flow: http.HTTPFlow) -> None:
     flow.request.headers["Authorization"] = f"Bearer {_get_token(profile)}"
     ctx.log.info(
         f"cloudflare: {flow.request.method} {flow.request.path} (profile={profile})"
+    )
+    audit.log_event(
+        "token_injected", provider="cloudflare", profile=profile,
+        method=flow.request.method, path=flow.request.path,
     )

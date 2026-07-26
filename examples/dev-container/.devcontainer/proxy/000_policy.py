@@ -15,6 +15,8 @@ hosts) as a hardening pass once the set of required destinations is known.
 """
 from mitmproxy import http, ctx
 
+import audit
+
 _INTERNAL_HOSTS = {"broker", "cred-gateway"}
 
 
@@ -49,3 +51,4 @@ def request(flow: http.HTTPFlow) -> None:
             f"policy: BLOCKED request to internal host {host} "
             f"(Host header: {flow.request.pretty_host})"
         )
+        audit.log_event("blocked", reason="internal_host", host=host)
