@@ -8,6 +8,34 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.1.3 — 2026-07-26
+
+### Fixed
+
+**`examples/claude-code`'s Anthropic credential no longer lives in `.env`.** It previously held
+a literal `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) value — the only secret in either
+example that wasn't a file under `~/.config/agent-creds/`, inconsistent with the GitHub App
+private key sitting right next to it in the same directory, and an easy file to accidentally
+`cat`, commit, or share. The broker now reads `ANTHROPIC_API_KEY_PATH` /
+`ANTHROPIC_AUTH_TOKEN_PATH`, the same convention `GITHUB_APP_PRIVATE_KEY_PATH` already used.
+`tests/e2e` mounts this example's broker directly, so its `compose.yaml`, `.env.example`,
+`run.sh` preflight check, and README are updated to match.
+
+**Upgrading:** move the value out of `.env` into a file, then delete the line:
+
+```bash
+printf '<your-key>' > ~/.config/agent-creds/anthropic.key   # or anthropic-auth.token for an OAuth token
+chmod 600 ~/.config/agent-creds/anthropic.key
+```
+
+Remove `ANTHROPIC_API_KEY=`/`ANTHROPIC_AUTH_TOKEN=` from `examples/claude-code/.env`, then:
+
+```bash
+docker compose up -d --force-recreate broker proxy    # proxy restart needed — it caches the key for 5 min
+```
+
+---
+
 ## 1.1.2 — 2026-07-26
 
 ### Added
