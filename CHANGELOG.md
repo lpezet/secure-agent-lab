@@ -8,6 +8,28 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.1.0 — 2026-07-26
+
+### Added
+
+**Audit logging: `observer` and `log-rotator`.** `broker`, `proxy`, and `cred-gateway` now
+write a structured, secret-free JSONL trail — what got injected, blocked, or issued, never a
+credential value — to a shared `audit-logs` volume. `observer` tails it and serves a live view
+at `http://localhost:9000` (loopback-only, with no `secure`/`dev` network membership of its
+own — Docker volumes aren't network-scoped, so it reaches the trail without joining either).
+`log-rotator` rotates the files daily via `logrotate` (`copytruncate`, 14-day retention, a
+`maxsize` safety net) and self-heals the shared volume's permissions on every start, since
+`broker` (`node`) and `proxy` (`mitmproxy`) are different non-root uids writing into one
+directory.
+
+Available today in `stack/compose.yaml` — see `stack/CLAUDE.md` for a smoke-test walkthrough
+that needs no real credentials. Not yet wired into `examples/` in this release.
+
+No upgrade steps: every new environment variable and volume mount is additive and a no-op if
+absent, and nothing about the existing security boundary changed.
+
+---
+
 ## 1.0.0 — 2026-07-22
 
 ### Security
