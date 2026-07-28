@@ -271,9 +271,12 @@ headers, bodies, or query strings.
 
 Paths need a judgement call, because some providers put the credential in
 the URL rather than a header — Telegram's is `/bot<TOKEN>/<method>`, and
-`?access_token=` query strings are the same shape. For those, logging
-`flow.request.path` writes a live credential to disk. Parse the part you
-actually want instead:
+`?access_token=` query strings are the same shape. Two things make the raw
+path riskier than it looks: **mitmproxy's `flow.request.path` includes the
+query string**, so "I only logged the path" is not the guarantee it sounds
+like, and a path segment that is safe today can start carrying an id or a
+token when the provider adds an endpoint. Parse out the part you actually
+want:
 
 ```python
 # Telegram: /bot<TOKEN>/<METHOD> — never log the path itself
@@ -281,10 +284,18 @@ api_method = flow.request.path.split("/")[2]
 audit.log_event("cred_injected", provider="telegram", api_method=api_method)
 ```
 
-Logging the raw path is fine for a provider that authenticates by header
-only — the shipped `020_anthropic.py` records `path=/v1/messages`, which
-carries no secret. Establish which kind of provider you are dealing with
-before deciding, and default to parsing if unsure.
+The shipped addons do this too — see `_endpoint()` in `020_anthropic.py`,
+which drops the query string and keeps the first two segments, so the trail
+records `/v1/messages` rather than `/v1/messages/batches/<id>?beta=…`. Copy
+that shape, but pick the slice for *your* provider: the segments that are
+safe to keep are exactly what differs between Anthropic and Telegram, which
+is why there is no shared helper for it in `audit.py`.
+
+Logging the raw path is defensible for a provider that authenticates by
+header only and has no ids in its URLs — but establish that it is that kind
+of provider before deciding, and default to parsing if unsure. The parsed
+form costs one function and never has to be revisited when the provider
+grows an endpoint that carries something.
 
 **Log the refusals, not just the successes.** Every error return needs an
 event too — a missing credential file, an unparseable one, a provider API
