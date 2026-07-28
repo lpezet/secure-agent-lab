@@ -8,6 +8,76 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.3.1 — 2026-07-28
+
+### Added
+
+**`LICENSE` — MIT.** The repo had shipped without one, which left anyone
+vendoring `stack/` or `examples/` into their own project with no stated
+terms. No functional change.
+
+### Changed
+
+**`PLAYBOOK.md` now covers maintenance, not just generation.** The file
+landed in 1.2.0 written almost entirely for the generate-a-new-stack case;
+"Upgrading" was three lines. Most real use of a deployment is the other
+thing. Rewritten after two rounds of review from an agent maintaining a live
+deployment of this stack:
+
+- **The bind-mount trap is now the first thing "Upgrading" says.** A
+  deployment is versioned in two halves and only one moves when you repin:
+  `compose.yaml` builds each image from `stack/<service>` at the tag, but the
+  files that enforce the boundary (`proxy/*.py`, `broker/*.js`,
+  `cred-gateway/*.conf`) are bind-mounted from the deployment's own
+  directories. Bumping the tag upgrades the images and leaves those files
+  untouched. That warning previously existed only in this file's 0.1.0 →
+  1.0.0 entry, so an upgrade that didn't cross that boundary never saw it —
+  which is how a real deployment ended up running post-1.0.0 images beside
+  pre-1.0.0 `pretty_host` addons. "Upgrading" is now a six-step procedure
+  with the reconciliation diff as its centre.
+- **`restart` no longer appears as the way to apply an upgrade.** Neither
+  `docker compose restart` nor a bare `up -d` rebuilds — the image is tagged
+  `<project>-<service>` and already exists, and Compose builds only when one
+  is missing. A changed git-URL tag in `build:` on its own gets you the old
+  image in a freshly recreated container. The step is now `build --pull`,
+  `up -d --force-recreate`, `docker compose images`.
+- **Anthropic: the credential-type-aware shape is documented.** The section
+  described `examples/dev-container`'s older `/anthropic/key` + `x-api-key`
+  route, so a Claude Code deployment following it literally injected an API
+  key over a subscription OAuth token — no error, just a silent drop to
+  API-key rate limits and billing. `/anthropic/cred` returning `{type,
+  value}` and preferring `ANTHROPIC_AUTH_TOKEN_PATH` has shipped in
+  `examples/claude-code` since 1.2.0; only the playbook was stale.
+- **Provenance is recorded at generation time.** The stub `CLAUDE.md` now
+  carries the pin, which `examples/` directory the deployment was generated
+  from, the tag each bind-mounted directory was last reconciled against, and
+  the custom files that have no upstream counterpart. Without the first two
+  the reconciliation diff can't be run at all; the third makes a skipped
+  reconciliation visible instead of silently inheriting a new pin.
+- **Audit logging gained the rules that make it safe and complete**: never
+  log headers, bodies or query strings, and never log a path for a provider
+  that carries its credential in the URL (Telegram's `/bot<TOKEN>/<method>`)
+  — parse an identifier instead; log refusals and failures, not just
+  successes; and `audit.js`/`audit.py` are libraries, so a custom provider
+  that calls neither is invisible while the dashboard looks complete.
+- **Also**: the egress allowlist is documented as an opt-in feature rather
+  than mentioned in passing; `observer`'s published port is env-indirect so
+  two stacks can share a host; a live spoofed-`Host` check against the broker
+  replaces the claim that verifying it needed more setup than it was worth;
+  and custom providers now come with an explicit statement that you own them
+  permanently and no upstream fix will reach them.
+
+**Upgrading:** nothing in `stack/` changed — no image, addon, provider or
+gateway file moved, and the security boundary is identical to 1.3.0.
+Repinning is enough.
+
+If your deployment has been repinned at any point *without* reconciling its
+bind-mounted files against the tag, run the new "Upgrading" procedure once
+against your current pin before moving on. That is the case this release
+exists to make routine, and a deployment in it has no symptom to notice.
+
+---
+
 ## 1.3.0 — 2026-07-26
 
 ### Changed
