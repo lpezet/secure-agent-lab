@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { logEvent } = require("./audit");
 
 const PORT = 8080;
 const PROVIDERS_DIR = process.env.PROVIDERS_DIR || path.join(__dirname, "providers");
@@ -22,17 +23,29 @@ const server = http.createServer(async (req, res) => {
     res.end(typeof obj === "string" ? obj : JSON.stringify(obj));
   };
 
+  // Outside the try so the catch can still name the route when URL parsing is
+  // what threw. Pathname only, never the query string — that can carry a
+  // credential (PLAYBOOK, "What is safe to log").
+  let route = "?";
+
   try {
     const url = new URL(req.url, `http://localhost:${PORT}`);
+    route = url.pathname;
 
     if (url.pathname === "/healthz") return send(200, { ok: true });
 
     const handler = routes[url.pathname];
-    if (!handler) return send(404, { error: "not found" });
+    if (!handler) {
+      logEvent("route_not_found", { route });
+      return send(404, { error: "not found" });
+    }
 
     await handler(url, send);
   } catch (err) {
     console.error("[broker] error:", err);
+    // err.name, not err.message: the message is provider-supplied free text and
+    // may quote a credential. Full detail still goes to stdout above.
+    logEvent("request_failed", { route, error: err.name || "Error" });
     send(500, { error: String(err.message || err) });
   }
 });
