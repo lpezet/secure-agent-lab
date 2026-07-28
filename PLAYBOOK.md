@@ -290,11 +290,17 @@ before deciding, and default to parsing if unsure.
 event too — a missing credential file, an unparseable one, a provider API
 that returned 401, a request the addon blocked. A trail that records only
 what worked is worse than misleading during an incident: absence of an event
-reads as "never happened" when it means "happened, and was refused." The
-shipped providers are stronger on this for blocks than for failures —
-`000_policy.py` logs its 403, while `examples/claude-code/broker/anthropic.js`
-returns 500 on a missing credential without logging anything — so don't take
-their success-path calls as the complete pattern to copy.
+reads as "never happened" when it means "happened, and was refused."
+
+**Name the failure, never quote it.** An exception message is free text from
+whoever raised it, and providers interpolate API responses into theirs, so a
+logged message is an uncontrolled string on its way to `observer`. Log
+`err.code` then `err.name` (`ENOENT`, `ECONNREFUSED`, `TypeError`) and leave
+the message to stdout, which is not the volume `observer` serves. `err.code`
+is only *conventionally* symbolic, though — node sets it to a constant, but
+nothing stops a provider writing `e.code = apiResponse.code` and putting a
+server-controlled string back in the trail. If you attach a `code` to an
+error you raise, make it a constant you defined.
 
 ### Last step: record the provenance
 
