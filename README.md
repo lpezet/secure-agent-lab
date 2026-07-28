@@ -12,6 +12,8 @@ stack/          Core reusable infrastructure (broker, proxy, cred-gateway, obser
 examples/
   dev-container/   VS Code dev container — open any repo in a secured workspace
   claude-code/     Claude Code in a secured container — attach and use interactively
+scripts/        check-drift.sh — does a deployment's bind-mounted files still
+                match the tag it is pinned at?
 tests/          Regression suite — integration (no credentials) and e2e (real ones)
 ```
 
@@ -79,7 +81,7 @@ cred-gateway (nginx) sits on both networks and acts as the narrow bridge. It den
 by default; whitelisted endpoints come from `*.conf` snippets bind-mounted at
 `/etc/nginx/gateway.d` (see `examples/*/cred-gateway/github.conf`), which expose only
 `/github/credential` and `/github/identity`, proxying those through to the broker on `secure`.
-Raw credential endpoints (`/anthropic/key`, `/github/token`) have no snippet and return 403 —
+Raw credential endpoints (`/anthropic/cred`, `/github/token`) have no snippet and return 403 —
 exposing them would let the dev container exfiltrate real secrets directly.
 
 In short: the **proxy** handles API traffic via token injection; **cred-gateway** handles git's
