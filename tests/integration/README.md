@@ -31,6 +31,7 @@ the tier that uses real ones.
 | | Needs docker | Covers |
 |---|---|---|
 | `00-config-lint` | no | Static invariants: exact-match locations only, no raw-credential endpoint in any snippet, dummy `proxy-injected` values intact, no committed key material, `010_github.py` still not matching `github.com`, `000_policy.py` first in load order |
+| `05-check-drift` | no | `scripts/check-drift.sh` against synthetic deployments: an edited addon is drift, a vendored `001_allowlist.py` resolves to `stack/proxy/addons/` rather than reading as ownerless, an unvendored `000_policy.py` is a missing control, a genuinely custom addon is owned but not a failure, non-tag build refs and stale `Reconciled:` tags are surfaced |
 | `10-cred-gateway` | yes | Whitelist behaviour: allowed paths reach the broker, denied paths 403, path-normalisation probes (`..`, `%2f`, case, trailing slash), rate limiting, multi-snippet composition, snippets read-only in-container, and that a prefix-match snippet really does leak `/github/token` |
 | `20-proxy-policy` | yes | `000_policy.py` blocks `broker` and `cred-gateway` across methods and paths, and cannot be bypassed with a spoofed `Host` header |
 | `25-proxy-injection` | yes | `010_github` / `020_anthropic` / `030_cloudflare` inject only for the genuine vendor host; a spoofed `Host` cannot redirect a credential to another server; Anthropic Admin API stays blocked |

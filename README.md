@@ -12,6 +12,8 @@ stack/          Core reusable infrastructure (broker, proxy, cred-gateway, obser
 examples/
   dev-container/   VS Code dev container — open any repo in a secured workspace
   claude-code/     Claude Code in a secured container — attach and use interactively
+scripts/        check-drift.sh — does a deployment's bind-mounted files still
+                match the tag it is pinned at?
 tests/          Regression suite — integration (no credentials) and e2e (real ones)
 ```
 
