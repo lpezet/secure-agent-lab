@@ -125,11 +125,31 @@ Produce:
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
   `dev` (dev + proxy + cred-gateway). The dev container is never on
   `secure`.
+- `proxy/000_policy.py`, copied verbatim from `stack/proxy/addons/` at the
+  pinned tag. The image ships no addons of its own — `/addons` exists only
+  because the deployment mounts it — so an unvendored policy addon is not a
+  stale control, it is a missing one, and nothing in the stack's health will
+  say so.
 - For each requested provider, the files described under "Known providers"
   above (or "A custom provider" below, for anything else).
 - If `observer`/`log-rotator` are requested: no `networks:` entry for
   either — see the constraints below for why that's correct, not an
   omission.
+- If egress filtering is requested (opt-in, off by default): copy
+  `stack/proxy/addons/001_allowlist.py` in alongside `000_policy.py`, and
+  mount the allowlist data file from a directory *other* than `proxy/` —
+  that whole directory lands at `/addons`, so a non-addon file placed in it
+  gets loaded as one:
+
+  ```yaml
+  volumes:
+    - ./allowlist:/etc/agent-allowlist:ro
+  ```
+
+  With no such file mounted the addon permits every destination and logs a
+  warning at startup, so a deployment that half-enables this fails open.
+  One entry per line, `domain [METHODS]`, methods defaulting to
+  `GET,HEAD,OPTIONS`; the addon's docstring has the full format.
 
 Generation-time constraints that apply regardless of which provider is
 being generated:
@@ -265,6 +285,16 @@ only — the shipped `020_anthropic.py` records `path=/v1/messages`, which
 carries no secret. Establish which kind of provider you are dealing with
 before deciding, and default to parsing if unsure.
 
+**Log the refusals, not just the successes.** Every error return needs an
+event too — a missing credential file, an unparseable one, a provider API
+that returned 401, a request the addon blocked. A trail that records only
+what worked is worse than misleading during an incident: absence of an event
+reads as "never happened" when it means "happened, and was refused." The
+shipped providers are stronger on this for blocks than for failures —
+`000_policy.py` logs its 403, while `examples/claude-code/broker/anthropic.js`
+returns 500 on a missing credential without logging anything — so don't take
+their success-path calls as the complete pattern to copy.
+
 ### Last step: record the provenance
 
 Write a small stub `CLAUDE.md` at the root of wherever the stack was
@@ -364,9 +394,11 @@ paperwork.
    entry's "Upgrading" section. Manual steps in a skipped intermediate
    release still apply.
 3. Diff every bind-mounted file against the new tag and port the
-   differences in by hand. The upstream counterparts live under
+   differences in by hand. Most upstream counterparts live under
    `examples/` — `stack/broker/providers/` and `stack/cred-gateway/gateway.d/`
-   ship empty by design, since content is what the deployment supplies:
+   hold only a README, since content is what the deployment supplies.
+   `stack/proxy/addons/` is the exception and needs a second diff of its
+   own, below:
 
    Which example is the counterpart is recorded in the stub `CLAUDE.md`'s
    `Generated from:` line (see "Last step: record the provenance"). Don't
@@ -386,15 +418,35 @@ paperwork.
    diff -ru cred-gateway/ "$REF/cred-gateway/"
    ```
 
+   Then diff the addons whose upstream home is `stack/proxy/addons/` rather
+   than `examples/`. The `examples/` copies are incomplete: every example
+   vendors `000_policy.py`, none vendors `001_allowlist.py`, so a deployment
+   that enabled egress filtering sees its allowlist addon reported as
+   `Only in proxy/` — indistinguishable from a custom provider, and step 4
+   would then have you treat an upstream file as ownerless:
+
+   ```bash
+   diff -u proxy/000_policy.py    "/tmp/sal-$NEW/stack/proxy/addons/000_policy.py"
+   diff -u proxy/001_allowlist.py "/tmp/sal-$NEW/stack/proxy/addons/001_allowlist.py"
+   # Both should match exactly. A diff in either is a finding, not a
+   # customization — these are upstream's files, vendored.
+   ```
+
+   Note what this is *not*: the proxy image does not ship these addons and
+   the mount does not shadow them. `stack/proxy/Dockerfile` bakes in only
+   `entrypoint.sh` and `audit.py`; `/addons` exists solely because the
+   deployment mounts it, and `entrypoint.sh` loads whatever `*.py` it finds
+   there. So a policy addon that was never vendored isn't a stale copy
+   hiding under a mount — it is a control that does not exist, with a
+   healthy-looking proxy in front of it.
+
    Diff from the tag each directory was last reconciled against, not from
    the tag `compose.yaml` happened to be pinned at — they differ whenever an
    earlier upgrade skipped this step, which is exactly the case worth
    catching. Expect legitimate divergence too: a deployment drops providers
    it doesn't use and adds ones upstream doesn't ship. Read every hunk and
-   decide; don't overwrite wholesale. `000_policy.py` is the one file that
-   should match upstream exactly (`/tmp/sal-$NEW/stack/proxy/addons/000_policy.py`
-   is the same file); a diff there is a finding, not a customization.
-   Update the stub's `Reconciled:` line as you go.
+   decide; don't overwrite wholesale. Update the stub's `Reconciled:` line as
+   you go.
 4. Custom providers have no upstream counterpart, so step 3 says nothing
    about them and no upstream fix has ever reached them. Re-read each one
    against the generation constraints under "Generating a stack" — in
