@@ -88,10 +88,11 @@ API-key billing.
   entire SSE body instead of passing chunks through live.
 - No `cred-gateway` route — the raw credential is never exposed to the dev
   container.
-- `examples/dev-container` still shows the older single-`/anthropic/key`,
-  API-key-only shape. It works, and it is what to diff against if that is
-  the example a deployment was generated from, but don't copy it into a new
-  Claude Code stack.
+- Both examples now show this shape. A deployment generated before 1.4.0
+  from `examples/dev-container` may still carry the older single
+  `/anthropic/key` route with `x-api-key` injection — it keeps working, but
+  it cannot use an OAuth token, so move it across on the next
+  reconciliation rather than leaving it.
 
 ### Cloudflare
 
