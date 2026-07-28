@@ -235,3 +235,7 @@ docker compose up -d --force-recreate proxy
 - `observer` and `log-rotator` have no `secure`/`dev` network membership — they reach the
   `audit-logs` volume without joining either, so the audit trail cannot become a new channel
   between the two.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
