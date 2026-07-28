@@ -131,6 +131,14 @@ being generated:
 - The broker calls provider APIs directly, never through the proxy —
   routing through the proxy would be circular (the proxy needs the broker
   to authenticate its own outbound calls).
+- Credentials are **files**, never environment variables. Each one lives in
+  the host directory bind-mounted read-only at `/secrets` (conventionally
+  `~/.config/agent-creds/`), and the broker learns its location from a
+  `*_PATH` env var — `GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem`,
+  `ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key`. A value passed as an env
+  var instead is readable via `docker inspect` and `/proc/<pid>/environ`,
+  leaks into any process dump or crash report, and tends to end up committed
+  in a `.env`. Follow the same convention for custom providers.
 - If a dev-side CLI tool needs a placeholder credential to pass its own
   "am I authenticated" check (e.g. `gh`, `wrangler`), use an obvious dummy
   value and let the proxy inject the real one at the wire level — never
@@ -140,6 +148,66 @@ being generated:
   `default` network ends up containing only the two of them, since every
   other service declares an explicit `networks:` list). Do not "fix" this
   by adding one.
+
+### Audit logging, `observer` and `log-rotator`
+
+Only if the end-user asked for it. All three services write JSONL to one
+shared named volume; `observer` reads it, `log-rotator` keeps it bounded
+and is what makes the volume writable at all:
+
+```yaml
+services:
+  broker:
+    volumes:
+      - audit-logs:/var/log/audit
+    environment:
+      AUDIT_LOG: /var/log/audit/broker.jsonl
+
+  proxy:
+    volumes:
+      - audit-logs:/var/log/audit
+    environment:
+      AUDIT_LOG: /var/log/audit/proxy.jsonl
+
+  # No AUDIT_LOG — nginx.conf is baked into the image and always writes
+  # /var/log/audit/cred-gateway.jsonl. The mount is all that's needed.
+  cred-gateway:
+    volumes:
+      - audit-logs:/var/log/audit
+
+  # Live view on :9000. Read-only, holds no credentials, loopback-published
+  # so it's viewable from the host but not from inside the stack.
+  observer:
+    build: https://github.com/lpezet/secure-agent-lab.git#vX.Y.Z:stack/observer
+    volumes:
+      - audit-logs:/var/log/audit:ro
+    ports:
+      - "127.0.0.1:9000:9000"
+    restart: unless-stopped
+
+  # Not optional if anything above is enabled — see below.
+  log-rotator:
+    build: https://github.com/lpezet/secure-agent-lab.git#vX.Y.Z:stack/log-rotator
+    volumes:
+      - audit-logs:/var/log/audit
+    restart: unless-stopped
+
+volumes:
+  audit-logs:
+```
+
+Neither `observer` nor `log-rotator` gets a `networks:` entry — see the
+constraint above.
+
+`log-rotator` is not just log hygiene, and dropping it to "add rotation
+later" breaks audit logging outright. broker runs as `node` and proxy as
+`mitmproxy` — two different non-root uids writing into the same directory
+— and its entrypoint `chmod 1777`s that directory on every start, as root,
+which is also what lets it `copytruncate` files regardless of which uid
+created them. It runs as root deliberately; nothing else in the stack does.
+
+If `observer`'s `9000` is already taken on the host, change the host side
+only (`"127.0.0.1:9001:9000"`).
 
 Last step: write a small stub `CLAUDE.md` at the root of wherever the stack
 was generated (e.g. `.devcontainer/CLAUDE.md`), recording the pinned tag and
@@ -157,6 +225,13 @@ affected services, then run the relevant check from "Verifying the stack"
 below.
 
 ### A custom provider
+
+**You own a custom provider permanently.** It is bind-mounted, so no
+upstream release will ever change it and the "diff against the new tag"
+step under "Upgrading" has nothing to compare it to. When a `CHANGELOG`
+entry describes a fix to an addon or provider, the fix applies to your
+custom ones too and you have to port it by hand. Say so to the end-user at
+the time you add one — that is the deal they are accepting.
 
 For anything not covered above:
 
@@ -181,12 +256,53 @@ project's `cred-gateway/` directory (bind-mounted to
 
 ## Upgrading
 
+**Read this before bumping a tag.** A deployment is versioned in two halves
+and only one of them moves when you repin. `compose.yaml` builds each
+service's *image* from `stack/<service>` at the pinned tag — but the files
+that actually enforce the security boundary (`proxy/*.py`, `broker/*.js`,
+`cred-gateway/*.conf`) are bind-mounted from the deployment's own
+directories and **shadow whatever the image ships**. Bumping the tag
+upgrades the images and leaves those files byte-for-byte as they were.
+
+That is the failure mode to design the upgrade around: a stack can be
+running images that carry a security fix while the vulnerable addon sits
+bind-mounted right next to them, with nothing in `docker compose ps` or a
+healthcheck to show for it. Step 3 below is the point of the upgrade, not
+paperwork.
+
 1. Bump the pinned tag in `compose.yaml` (and in the stub `CLAUDE.md`'s
    recorded pin) to the new tag.
-2. Read this repo's `CHANGELOG.md` for every entry between the old and new
-   tag, and apply anything listed under that entry's "Upgrading" section,
-   if present.
-3. Restart the affected services.
+2. Read this repo's `CHANGELOG.md` for **every** entry between the old and
+   new tag, not just the newest one, and apply anything listed under that
+   entry's "Upgrading" section. Manual steps in a skipped intermediate
+   release still apply.
+3. Diff every bind-mounted file against the new tag and port the
+   differences in by hand. The upstream counterparts live under
+   `examples/` — `stack/broker/providers/` and `stack/cred-gateway/gateway.d/`
+   ship empty by design, since content is what the deployment supplies:
+
+   ```bash
+   NEW=vX.Y.Z
+   git clone --depth 1 --branch "$NEW" \
+     https://github.com/lpezet/secure-agent-lab.git /tmp/sal-$NEW
+   REF=/tmp/sal-$NEW/examples/dev-container/.devcontainer   # or examples/claude-code
+
+   diff -ru proxy/        "$REF/proxy/"
+   diff -ru broker/       "$REF/broker/"
+   diff -ru cred-gateway/ "$REF/cred-gateway/"
+   ```
+
+   Expect legitimate divergence — a deployment drops providers it doesn't
+   use and adds ones upstream doesn't ship. Read every hunk and decide;
+   don't overwrite wholesale. `000_policy.py` is the one file that should
+   match upstream exactly (`/tmp/sal-$NEW/stack/proxy/addons/000_policy.py`
+   is the same file); a diff there is a finding, not a customization.
+4. Custom providers have no upstream counterpart, so step 3 says nothing
+   about them and no upstream fix has ever reached them. Re-read each one
+   against the generation constraints under "Generating a stack" — in
+   particular that it matches `flow.request.host` and never
+   `flow.request.pretty_host`.
+5. Restart the affected services, then re-run "Verifying the stack" below.
 
 ## Verifying the stack
 
