@@ -104,6 +104,33 @@ for pat in 'sk-ant-[A-Za-z0-9_-]{20,}' 'ghp_[A-Za-z0-9]{20,}' 'github_pat_[A-Za-
   else ko "credential-shaped string committed: /$pat/" "$hits"; fi
 done
 
+suite "audit events carry no exception text"
+# An exception message is free text from whatever threw it, and providers
+# interpolate API responses into theirs (cloudflare.js: `Cloudflare API error:
+# ${JSON.stringify(result.errors)}`). Log err.code or err.name — symbolic
+# constants this codebase or node defines — and leave the detail to stdout,
+# which is not the volume observer serves. Spans multiline calls: track parens
+# from `logEvent(`/`log_event(` to the close and flag the whole call.
+for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
+         examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
+         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  bad=$(awk '
+    { line = $0; sub(/[[:space:]]*(\/\/|#).*$/, "", line) }
+    !inside && line ~ /log_?[Ee]vent\(/ { inside = 1; start = NR; buf = "" ; depth = 0 }
+    inside {
+      buf = buf " " line
+      n = gsub(/\(/, "(", line); depth += n
+      n = gsub(/\)/, ")", line); depth -= n
+      if (depth <= 0) {
+        if (buf ~ /(err|error|e|exc)\.(message|stack)|str\(e\)|traceback/) print start ": " buf
+        inside = 0
+      }
+    }' "$f")
+  if [ -z "$bad" ]; then ok "$(basename "$f") — no exception text in an audit event"
+  else ko "$f — audit event carries exception text" "$bad"; fi
+done
+
 suite "github addon does not match github.com"
 # Documented invariant: git push/pull authenticates through the credential
 # helper. Matching github.com here collides with git's Basic auth handshake
