@@ -2,7 +2,7 @@ name: dev-container-agent
 
 services:
   broker:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.1.0:stack/broker
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.3.1:stack/broker
     volumes:
       - ${HOME}/.config/agent-creds:/secrets:ro
       - ./broker:/app/providers:ro
@@ -11,6 +11,7 @@ services:
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
       ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
+      ANTHROPIC_AUTH_TOKEN_PATH: /secrets/anthropic-auth.token
       CLOUDFLARE_MINTER_TOKEN_PATH: /secrets/cloudflare-minter.token
       AUDIT_LOG: /var/log/audit/broker.jsonl
     networks: [secure]
@@ -29,7 +30,7 @@ services:
     restart: unless-stopped
 
   proxy:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.1.0:stack/proxy
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.3.1:stack/proxy
     depends_on:
       broker:
         condition: service_healthy
@@ -60,7 +61,7 @@ services:
     restart: unless-stopped
 
   cred-gateway:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.1.0:stack/cred-gateway
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.3.1:stack/cred-gateway
     depends_on:
       broker:
         condition: service_healthy
@@ -84,7 +85,7 @@ services:
   # Dev Containers extension auto-forwards it), not from anywhere inside the
   # stack.
   observer:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.1.0:stack/observer
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.3.1:stack/observer
     volumes:
       - audit-logs:/var/log/audit:ro
     ports:
@@ -108,7 +109,7 @@ services:
   # non-root uids — can both write to it. Runs as root deliberately; see
   # stack/log-rotator/ in CLAUDE.md.
   log-rotator:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.1.0:stack/log-rotator
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.3.1:stack/log-rotator
     volumes:
       - audit-logs:/var/log/audit
     restart: unless-stopped

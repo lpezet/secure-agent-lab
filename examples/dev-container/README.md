@@ -13,6 +13,8 @@ mkdir -p ~/.config/agent-creds && chmod 700 ~/.config/agent-creds
 
 cp /path/to/your-app.private-key.pem ~/.config/agent-creds/github-app.pem
 printf 'sk-ant-...' > ~/.config/agent-creds/anthropic.key
+# or, to use an OAuth token instead (avoids API-tier rate limits):
+# printf 'sk-ant-oat01-...' > ~/.config/agent-creds/anthropic-auth.token
 printf '<cloudflare-minter-token>' > ~/.config/agent-creds/cloudflare-minter.token
 chmod 600 ~/.config/agent-creds/*
 ```
@@ -96,7 +98,7 @@ curl -s -o /dev/null -w "%{http_code}" --proxy http://proxy:8080 http://broker:8
 # → 403
 
 # 3. cred-gateway must deny endpoints that would expose raw credentials
-curl -s -o /dev/null -w "%{http_code}" http://cred-gateway/anthropic/key
+curl -s -o /dev/null -w "%{http_code}" http://cred-gateway/anthropic/cred
 # → 403
 curl -s -o /dev/null -w "%{http_code}" http://cred-gateway/github/token
 # → 403
