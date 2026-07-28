@@ -394,9 +394,29 @@ paperwork.
    entry's "Upgrading" section. Manual steps in a skipped intermediate
    release still apply.
 3. Diff every bind-mounted file against the new tag and port the
-   differences in by hand. Most upstream counterparts live under
-   `examples/` — `stack/broker/providers/` and `stack/cred-gateway/gateway.d/`
-   hold only a README, since content is what the deployment supplies.
+   differences in by hand.
+
+   `scripts/check-drift.sh` does the comparison for you, including the
+   counterpart resolution the rest of this step describes. It needs nothing
+   but bash, git and diff, and it reads the deployment's own pin and
+   provenance stub:
+
+   ```bash
+   # From a checkout of this repo, against your deployment directory:
+   scripts/check-drift.sh --to "$NEW" /path/to/deployment
+   scripts/check-drift.sh --to "$NEW" --show-diff /path/to/deployment  # with hunks
+   ```
+
+   It exits non-zero on drift or a missing `000_policy.py`, so it also works
+   as a pre-upgrade gate in CI. Custom providers are reported as `custom`
+   and don't fail the run — they can't drift, since they have nothing to
+   drift from, but step 4 still applies to them.
+
+   The rest of this step is what the script automates, and what to do by
+   hand if you're upgrading *from* a tag before 1.4.0 that doesn't ship it.
+   Most upstream counterparts live under `examples/` —
+   `stack/broker/providers/` and `stack/cred-gateway/gateway.d/` hold only a
+   README, since content is what the deployment supplies.
    `stack/proxy/addons/` is the exception and needs a second diff of its
    own, below:
 
