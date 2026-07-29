@@ -181,6 +181,26 @@ for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/a
   else ko "$f — logs a raw request path" "$bad"; fi
 done
 
+# Splitting the raw path on "/" is the same bug wearing a parse. Because
+# flow.request.path carries the query string, the last segment absorbs it:
+# on /bot<TOKEN>/sendMessage?chat_id=…&text=…, split("/")[2] is the message
+# body, not the method. The token sits in segment 1 and stays out, which is
+# what lets the mistake read as safe. The fix is ordering — split("?", 1)[0]
+# first — so the check is for a "/" split taken directly off the raw path.
+#
+# PLAYBOOK.md is in scope, and is why this exists: it shipped that exact
+# snippet as the *recommended* Telegram pattern from 1.2.0 to 1.4.1, in the
+# paragraph warning that the path includes the query string. A deployment
+# following it built the leak the release was written to prevent. Prose
+# mentions are backticked; code blocks are not.
+for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
+         stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  bad=$(grep -n 'flow\.request\.path\.split("/")' "$f" | grep -v '`' || true)
+  if [ -z "$bad" ]; then ok "$(basename "$f") — no \"/\" split off a raw path"
+  else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
+done
+
 suite "policy addon loads before provider addons"
 # 000_policy.py must run first; entrypoint.sh globs alphabetically.
 for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do
