@@ -8,6 +8,40 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.4.1 — 2026-07-29
+
+### Fixed
+
+**`cred-gateway/github.conf` pointed at directories no deployment has.** Both
+examples opened with "Counterpart to `addons/010_github.py` and
+`providers/github.js`" — those are the *container-side* mount targets, not
+the directory names in a generated stack, which are `proxy/` and `broker/`
+per the one-directory-per-service layout the rest of the repo uses. Anyone
+following the comment went looking for directories that aren't there.
+
+**`broker/anthropic.js` returned `""` for an empty credential file.** No call
+site changes behaviour — `""` is falsy, so an empty auth-token file already
+fell through to the API key — so this is contract hygiene rather than a bug
+fix: `tryReadFile` reads as "the value, or null", and that stops being true
+the day a caller tests `!== null`. It now returns `null`. Also picked up a
+note on why the read is deliberately uncached (local file read; rotating the
+credential needs no broker restart).
+
+Both were found by running 1.4.0's own `scripts/check-drift.sh` against a
+live deployment for the first time — the drift it reported in these two
+files turned out to be ours, not the deployment's.
+
+**Upgrading:** these are `examples/` files, so repinning does not deliver
+them — the same bind-mount split 1.4.0 is about. Nothing here affects the
+security boundary or runtime behaviour, so there's no urgency, but if you
+are reconciling for 1.4.0 anyway, pin to `v1.4.1` and take both in one pass:
+
+```bash
+scripts/check-drift.sh --to v1.4.1 /path/to/deployment
+```
+
+---
+
 ## 1.4.0 — 2026-07-29
 
 ### Added
