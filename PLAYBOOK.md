@@ -286,11 +286,25 @@ like, and a path segment that is safe today can start carrying an id or a
 token when the provider adds an endpoint. Parse out the part you actually
 want:
 
+Strip the query string *before* splitting, not after. Getting that order
+wrong is the whole hazard in miniature: on
+`/bot<TOKEN>/sendMessage?chat_id=…&text=…`, a bare `split("/")[2]` returns
+`sendMessage?chat_id=…&text=…` — the recipient and the message body, written
+into the trail as if it were a method name. The token itself is in segment
+1 and stays out, which is exactly why the mistake survives review.
+
 ```python
-# Telegram: /bot<TOKEN>/<METHOD> — never log the path itself
-api_method = flow.request.path.split("/")[2]
+# Telegram: /bot<TOKEN>/<METHOD>?<params> — never log the path itself.
+# split("?") first: flow.request.path carries the query string, so splitting
+# on "/" alone puts it inside the last segment.
+parts = [p for p in flow.request.path.split("?", 1)[0].split("/") if p]
+api_method = parts[1] if len(parts) > 1 else "?"
 audit.log_event("cred_injected", provider="telegram", api_method=api_method)
 ```
+
+Indexing defensively matters too — an addon that raises on a malformed path
+takes the request down with it, and a path short enough to break `parts[1]`
+is exactly what a prober sends.
 
 The shipped addons do this too — see `_endpoint()` in `020_anthropic.py`,
 which drops the query string and keeps the first two segments, so the trail
