@@ -105,14 +105,20 @@ for pat in 'sk-ant-[A-Za-z0-9_-]{20,}' 'ghp_[A-Za-z0-9]{20,}' 'github_pat_[A-Za-
 done
 
 suite "audit events reference an exception only via .code or .name"
-# An exception message is free text from whatever threw it, and providers
-# interpolate API responses into theirs (cloudflare.js: `Cloudflare API error:
-# ${JSON.stringify(result.errors)}`). Detail belongs on stdout, which is not
-# the volume observer serves.
+# Not the security control. The audit trail is written entirely by whatever
+# provider and addon files a deployment mounts, and this suite cannot see
+# those — PLAYBOOK.md's "What is safe to log" is what reaches them. What this
+# guards is the files people copy: every generated stack starts by vendoring
+# an example, so the anti-pattern must not ship in one.
 #
-# Allowlist, not blocklist. Enumerating the ways to spell "the error" loses to
-# the next one invented — String(err), `${err}`, err.toString(), err.cause,
-# str(exc), f"{e}" are all the same leak, and String(err) is the spelling
+# An exception message is free text from whoever raised it, and providers
+# interpolate vendor responses into theirs (cloudflare.js: `Cloudflare API
+# error: ${JSON.stringify(result.errors)}`). Detail belongs on stdout, which
+# observer does not read.
+#
+# Allowlist, not blocklist. Enumerating the ways of writing "the error" loses
+# to the next one invented — String(err), `${err}`, err.toString(), err.cause,
+# str(exc), f"{e}" are all the same leak, and String(err) is what
 # stack/broker/server.js itself used before this suite existed. So: inside a
 # logEvent()/log_event() call, strip the field *names*, strip the two permitted
 # references, and flag any mention of the exception variable that survives.

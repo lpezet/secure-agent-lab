@@ -65,15 +65,16 @@ const server = http.createServer(async (req, res) => {
     await handler(url, send);
   } catch (err) {
     console.error("[broker] error:", err);
-    // err.code, then err.name — both are symbolic constants this codebase or
-    // node defines (ENOENT, ECONNREFUSED, TypeError). Never err.message: it is
-    // provider-supplied free text and may quote a credential, e.g.
-    // cloudflare.js interpolating an API error body. Full detail goes to
-    // stdout above, which is not the volume observer serves.
+    // err.code, then err.name — symbolic constants node or this codebase
+    // defines (ENOENT, ECONNREFUSED, TypeError). Never err.message: providers
+    // interpolate vendor responses into theirs (cloudflare.js quotes the
+    // Cloudflare API error body), so it is a string we did not construct, on
+    // its way to a file observer publishes over HTTP. Full detail goes to
+    // stdout above, which observer does not read.
     logEvent("request_failed", { route, error: err.code || err.name || "Error" });
-    // Generic, for the same reason: err.message on a missing credential file is
-    // `ENOENT ... open '/secrets/anthropic.key'`, which hands the caller the
-    // /secrets layout. The useful part is already in the trail and on stdout.
+    // Generic for the same reason, and the caller here can be the dev
+    // container by way of cred-gateway. Nothing is lost: the detail is on
+    // stdout and the shape of the failure is already in the trail.
     send(500, { error: "internal error" });
   }
 });

@@ -104,7 +104,7 @@ cred-gateway also writes a JSON audit line per request (`log_format audit_json` 
 
 Node HTTP server on `:9000`, dependency-free like the broker. Polls `/var/log/audit/*.jsonl` every 500ms, broadcasts new lines over SSE at `/events`, and serves a minimal live-stream dashboard at `/`. Keeps a 200-event in-memory backlog so a client that connects mid-run sees recent history immediately.
 
-Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
+Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials — but note it is the one service whose safety the stack cannot supply. It publishes over HTTP whatever the trail contains, and the images write no events themselves: every line comes from a bind-mounted provider or addon file the deployment owns. `observer` is therefore only as leak-free as those files are, which is why `PLAYBOOK.md`'s "What is safe to log" is addressed to whoever writes them. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
 
 ### log-rotator (`stack/log-rotator/`)
 
