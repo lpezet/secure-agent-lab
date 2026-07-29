@@ -63,7 +63,7 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 | `/github/token` | proxy `010_github.py` | Installation token, cached with 5-min safety window |
 | `/github/credential` | cred-gateway → dev git helper | Same token in `git credential` format |
 | `/github/identity` | cred-gateway → setup-start.sh | App name+email for `git config`, lifetime-cached |
-| `/anthropic/key` | proxy `020_anthropic.py` | Reads key file on each uncached call |
+| `/anthropic/cred` | proxy `020_anthropic.py` | Returns `{type, value}`; prefers `ANTHROPIC_AUTH_TOKEN_PATH` (OAuth) over `ANTHROPIC_API_KEY_PATH`, read fresh on each uncached call |
 | `/cloudflare/token?profile=` | proxy `030_cloudflare.py` | Mints scoped token via Cloudflare API, cached per profile |
 | `/healthz` | Docker healthcheck | |
 
@@ -96,7 +96,7 @@ Both examples vendor `cred-gateway/github.conf`, the counterpart to their `proxy
 
 Snippets must use exact-match locations (`location = /path`); a prefix match like `location /github/` would expose `/github/token`. The mount source must sit outside whatever is mounted at `/workspace`, or the dev container could widen its own whitelist — `examples/dev-container` mounts `../:/workspace` so it shadows `.devcontainer` with a nested read-only bind to close that.
 
-Everything else returns 403. `/anthropic/key`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the dev container to exfiltrate raw credentials.
+Everything else returns 403. `/anthropic/cred`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the dev container to exfiltrate raw credentials.
 
 cred-gateway also writes a JSON audit line per request (`log_format audit_json` in `nginx.conf`) to `/var/log/audit/cred-gateway.jsonl`, separate from the existing stdout access log. `/healthz` opts out via `access_log off;` in its location block so healthchecks do not spam the trail. Unlike the broker/proxy helpers this is not opt-in: nginx opens configured `access_log` targets at startup and fails hard if the directory is missing, so the Dockerfile bakes in an empty `/var/log/audit` (same "valid unmounted" treatment as `gateway.d`) — the runtime volume mount just shadows it.
 
@@ -104,7 +104,7 @@ cred-gateway also writes a JSON audit line per request (`log_format audit_json` 
 
 Node HTTP server on `:9000`, dependency-free like the broker. Polls `/var/log/audit/*.jsonl` every 500ms, broadcasts new lines over SSE at `/events`, and serves a minimal live-stream dashboard at `/`. Keeps a 200-event in-memory backlog so a client that connects mid-run sees recent history immediately.
 
-Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
+Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials — but note it is the one service whose safety the stack cannot supply. It publishes over HTTP whatever the trail contains, and the images write no events themselves: every line comes from a bind-mounted provider or addon file the deployment owns. `observer` is therefore only as leak-free as those files are, which is why `PLAYBOOK.md`'s "What is safe to log" is addressed to whoever writes them. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
 
 ### log-rotator (`stack/log-rotator/`)
 
@@ -147,7 +147,7 @@ Runs as root, unlike every other service in this stack. That's deliberate here, 
 
 **`observer` and `log-rotator` deliberately have no `networks:` entry in `compose.yaml`** — see `PLAYBOOK.md`'s generation constraints for the mechanism and why not to "fix" it.
 
-**Examples do not pick up `stack/` changes until they repin their build tag.** `stack/broker/audit.js` and `stack/proxy/audit.py` are baked into the image; example provider/addon files under `examples/*/broker/` and `examples/*/proxy/` are bind-mounted at runtime into whatever tag that example's `compose.yaml` builds from (`...git#vX.Y.Z:stack/broker`). Adding `require("../audit")` or `import audit` to an example's files before its pin reaches the release that introduced those helpers (1.1.0) would `MODULE_NOT_FOUND` at runtime. `examples/dev-container` is pinned to 1.1.0 and does call the helpers; `examples/claude-code` is still on 1.0.0 and must not, until it's repinned. `tests/integration/00-config-lint.test.sh` derives this per example from its actual pinned tag rather than a hardcoded list, so it keeps working unattended as each example upgrades in turn.
+**Examples do not pick up `stack/` changes until they repin their build tag.** `stack/broker/audit.js` and `stack/proxy/audit.py` are baked into the image; example provider/addon files under `examples/*/broker/` and `examples/*/proxy/` are bind-mounted at runtime into whatever tag that example's `compose.yaml` builds from (`...git#vX.Y.Z:stack/broker`). Adding `require("../audit")` or `import audit` to an example's files before its pin reaches the release that introduced those helpers (1.1.0) would `MODULE_NOT_FOUND` at runtime. Both examples are now pinned above that (`dev-container` 1.3.1, `claude-code` 1.2.0) and call the helpers; the constraint binds the next example added, or any repin that moves one *down*. `tests/integration/00-config-lint.test.sh` derives this per example from its actual pinned tag rather than a hardcoded list, so it keeps working unattended as each example upgrades in turn.
 
 **cred-gateway's `access_log` requires the target directory to exist at container start, unlike the broker/proxy `AUDIT_LOG` env vars.** nginx opens every configured `access_log` file during startup and fails hard (`emerg`, refuses to start) if the directory is missing — there's no equivalent to the no-op-when-unset behavior `audit.js`/`audit.py` have, since nginx.conf is static and baked in. That's why `stack/cred-gateway/Dockerfile` bakes in an empty `/var/log/audit` even though the real content lives on the mounted volume.
 
@@ -183,6 +183,11 @@ When a release branch is ready:
 1. Add a `CHANGELOG.md` entry directly on the release branch (see existing entries for format — this project versions the security boundary, not the code, so most entries need no "Upgrading" section).
 2. Open a PR from the release branch into `main`, get it reviewed, merge it.
 3. Tag `vX.Y.Z` on `main`.
-4. **Sync every other still-open release branch by merging `main` into it.** This is the step that makes the standing-branch approach safe: without it, a fix that lands via the patch branch never reaches the minor branch, which is the same "forgot where to land it" risk one level up, just moved from branch-creation-time to release-time.
+4. **Sync forward only.** Merge `main` into every still-open release branch whose version is *above* the tag you just cut. Never merge it into one below. The direction is the whole rule:
 
-Worked example from `v1.1.0` → `v1.1.1`: `release/1.1.1` and `release/1.2.0` were cut from `main` right after tagging `v1.1.0`. A fix (`fix/dev-container-observer`) targeted `release/1.1.1`, not `main`. Once that PR merged into `release/1.1.1`, a CHANGELOG entry went straight on `release/1.1.1`, that branch PR'd into `main`, and `main` got tagged `v1.1.1`. Immediately after, `main` was merged into `release/1.2.0` so the still-open minor branch picked up the fix too.
+   - **Above the tag — merge `main` in.** That branch will supersede this release, so it has to contain it. Skipping this is how a fix that lands via the patch branch never reaches the minor branch: the same "forgot where to land it" risk one level up, moved from branch-creation-time to release-time. This is what makes the standing-branch approach safe.
+   - **Below the tag — it is overtaken, not dormant.** This project only moves forward; no older line is supported and nothing gets backported. Releasing a minor therefore does *not* mean syncing the previous minor's still-open branch: once `v1.4.0` is tagged, `release/1.3.2` has simply been passed, and merging `main` into it would only rebuild 1.4.0 under a patch number. Leave it where it is and retarget any work still aimed at it onto the current patch branch. (If an overtaken branch ever does need to ship, rebase its unique commits onto its own tag — `git rebase --onto v1.3.1 …` — never merge `main`.)
+
+Most `release/*` branches here are inert: level with or behind `main`, carrying no unique commits, kept deliberately as markers of where a line was cut. Nothing needs doing to them, and by the rule above nothing ever should be.
+
+Worked example from `v1.1.0` → `v1.1.1` — the above-the-tag case: `release/1.1.1` and `release/1.2.0` were cut from `main` right after tagging `v1.1.0`. A fix (`fix/dev-container-observer`) targeted `release/1.1.1`, not `main`. Once that PR merged into `release/1.1.1`, a CHANGELOG entry went straight on `release/1.1.1`, that branch PR'd into `main`, and `main` got tagged `v1.1.1`. Immediately after, `main` was merged into `release/1.2.0` — above `1.1.1`, so it had to carry the fix forward.

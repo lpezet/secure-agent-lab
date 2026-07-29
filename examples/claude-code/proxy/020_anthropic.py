@@ -19,6 +19,26 @@ def _get_cred():
     return _cache["cred"]
 
 
+def _endpoint(flow: http.HTTPFlow) -> str:
+    """A loggable identifier for what was called, never the raw path.
+
+    Two reasons this is parsed rather than passed straight through:
+    flow.request.path includes the query string, and this file is one of the
+    ones people copy when writing their own addon. A provider that carries its
+    credential in the URL — Telegram's /bot<TOKEN>/<method>, or an
+    ?access_token= on the query — turns `path=flow.request.path` into a live
+    secret written to the audit trail, which observer then serves over HTTP.
+
+    Anthropic authenticates by header, so its path holds no secret; keeping the
+    first two segments also bounds the cardinality (/v1/messages rather than
+    /v1/messages/batches/<id>). If you adapt this for a provider whose
+    credential IS in the path, drop the segments that carry it — the safe
+    slice is provider-specific, which is why there is no shared helper for it.
+    """
+    parts = [p for p in flow.request.path.split("?", 1)[0].split("/") if p][:2]
+    return "/" + "/".join(parts)
+
+
 def request(flow: http.HTTPFlow) -> None:
     # flow.request.host is the real destination. Do NOT use pretty_host here:
     # it prefers the client-supplied Host header, so the dev container could
@@ -34,8 +54,9 @@ def request(flow: http.HTTPFlow) -> None:
             b'{"error":"Admin API blocked by proxy policy"}',
             {"Content-Type": "application/json"},
         )
-        ctx.log.warn(f"anthropic: BLOCKED {flow.request.method} {flow.request.path}")
-        audit.log_event("blocked", provider="anthropic", reason="admin_api", path=flow.request.path)
+        ctx.log.warn(f"anthropic: BLOCKED {flow.request.method} {_endpoint(flow)}")
+        audit.log_event("blocked", provider="anthropic", reason="admin_api",
+                        endpoint=_endpoint(flow))
         return
 
     cred_type, cred_value = _get_cred()
@@ -47,17 +68,17 @@ def request(flow: http.HTTPFlow) -> None:
 
     if cred_type == "auth_token":
         flow.request.headers["Authorization"] = f"Bearer {cred_value}"
-        ctx.log.info(f"anthropic: injected auth token for {flow.request.method} {flow.request.path}")
+        ctx.log.info(f"anthropic: injected auth token for {flow.request.method} {_endpoint(flow)}")
     else:
         flow.request.headers["x-api-key"] = cred_value
         flow.request.headers["anthropic-version"] = flow.request.headers.get(
             "anthropic-version", "2023-06-01"
         )
-        ctx.log.info(f"anthropic: injected api key for {flow.request.method} {flow.request.path}")
+        ctx.log.info(f"anthropic: injected api key for {flow.request.method} {_endpoint(flow)}")
 
     audit.log_event(
         "cred_injected", provider="anthropic", cred_type=cred_type,
-        method=flow.request.method, path=flow.request.path,
+        method=flow.request.method, endpoint=_endpoint(flow),
     )
 
 

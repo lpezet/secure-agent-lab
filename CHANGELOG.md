@@ -8,6 +8,113 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.4.0 — 2026-07-29
+
+### Added
+
+**`scripts/check-drift.sh` — 1.3.1's reconciliation step, automated.** 1.3.1
+put the bind-mount trap at the centre of "Upgrading" but left the diff as a
+manual walk across three directories with a different resolution rule per
+file. This runs it. It reads the deployment's own pin from `compose.yaml`
+and its provenance from the stub `CLAUDE.md`, resolves each bind-mounted
+file against the right upstream counterpart, and reports `DRIFT`, `MISSING`
+or `custom`:
+
+```bash
+scripts/check-drift.sh --to v1.4.0 /path/to/deployment
+scripts/check-drift.sh --to v1.4.0 --show-diff /path/to/deployment
+```
+
+Needs only bash, git and diff, and exits non-zero on drift or an absent
+`000_policy.py`, so it doubles as a pre-upgrade CI gate. The counterpart
+resolution is the part worth having a tool for: most files compare against
+`examples/`, but `000_policy.py` and `001_allowlist.py` compare against
+`stack/proxy/addons/`, because the proxy image ships no addons at all and a
+policy addon that was never vendored is a *missing* control rather than a
+stale one. Custom providers are reported as `custom` and don't fail the run
+— they have nothing upstream to drift from. Covered by
+`tests/integration/05-check-drift`, which needs no docker.
+
+### Changed
+
+**The broker records its failures, not just its successes.**
+`stack/broker/server.js` emitted audit events only from the paths that
+worked: an unroutable request or a handler that threw left nothing in the
+trail, which during an incident reads as "never happened" rather than
+"happened, and failed". It now emits `route_not_found` and `request_failed`.
+
+Both are deliberately terse about anything the caller supplied. A 404 names
+the provider *namespace*, and only when it matches one this server actually
+registered — never the requested path. A provider that carries its
+credential in the URL (Telegram's `/bot<TOKEN>/<method>`) would otherwise
+write a live secret into a file `observer` publishes over HTTP, and
+truncating to N segments cannot help, since the secret is as likely to be in
+the first segment as any other. A failure is named by `err.code` or
+`err.name`, never `err.message` — providers build those from vendor response
+bodies. Full detail still goes to stdout, which `observer` does not read.
+
+The 500 response body is now a flat `{"error":"internal error"}` for the
+same reason. That is the only externally visible behaviour change in this
+release; nothing in the stack parses that body.
+
+**Addons log a parsed endpoint instead of the raw request path.** The
+shipped `020_anthropic.py` and `030_cloudflare.py` recorded
+`flow.request.path` directly. Two problems: **mitmproxy's
+`flow.request.path` includes the query string**, so "I only logged the path"
+was never the guarantee it sounded like, and a path that is safe today
+starts carrying an id or a token the moment the provider adds an endpoint.
+Both now parse an endpoint — query string dropped, then the leading
+segments, sized per provider (two for Anthropic, three for Cloudflare, whose
+paths carry an account id deeper in) — so the trail records `/v1/messages`
+rather than `/v1/messages/batches/<id>?beta=…`. Which slice is safe is
+exactly what differs between providers, so there is no shared helper for it
+in `audit.py`. The `/v1/organizations` policy check still tests the real
+path; only the logging changed.
+
+**`examples/dev-container` repinned to 1.3.1 and moved to
+`/anthropic/cred`.** It was still pinned at v1.1.0 and carrying the older
+single `/anthropic/key` route with `x-api-key` injection, which silently
+drops a Claude subscription's OAuth token to API-key billing and rate
+limits. It now matches `examples/claude-code`: `/anthropic/cred` returning
+`{type, value}`, preferring `ANTHROPIC_AUTH_TOKEN_PATH` over
+`ANTHROPIC_API_KEY_PATH`. Providing an OAuth token is now a file drop plus
+the new `ANTHROPIC_AUTH_TOKEN_PATH` line in `compose.yaml`.
+
+**`PLAYBOOK.md`: the audit trail's leak risk is located at `observer`.** The
+guidance had grown into prescribing how a provider should handle its own
+exceptions, which is below this project's layer. It now states the property
+instead: the images contribute no audit events, so every line in the trail
+was written by a provider or addon file the *deployment* owns, and
+`observer` publishes whatever that is over HTTP. It is the one service whose
+safety is inherited rather than supplied — which is what makes "log values
+you chose yourself" a boundary rule and not a style preference. Same note
+added to `CLAUDE.md`'s `observer` section, which read as an unqualified
+"holds no credentials".
+
+**Upgrading:** the two halves come apart in this release, so both steps
+matter.
+
+*Images:* `stack/broker/server.js` changed, so repinning and rebuilding gets
+you the broker's failure logging — `build --pull`, then `up -d
+--force-recreate`, then `docker compose images` to confirm the tag actually
+moved.
+
+*Bind-mounts:* the addon and provider changes above are in `examples/`,
+which means they are **not** delivered by repinning. If your deployment was
+generated from either example, reconcile:
+
+```bash
+scripts/check-drift.sh --to v1.4.0 /path/to/deployment
+```
+
+Nothing here is a security regression if you skip it — the raw-path logging
+is a hazard that depends on your provider, and the Anthropic route change is
+a billing-tier issue rather than a boundary one. But this is the first
+release whose own contents demonstrate the trap the tool exists for, so it
+is worth running once even if you believe you are clean.
+
+---
+
 ## 1.3.1 — 2026-07-28
 
 ### Added

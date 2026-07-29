@@ -88,10 +88,11 @@ API-key billing.
   entire SSE body instead of passing chunks through live.
 - No `cred-gateway` route — the raw credential is never exposed to the dev
   container.
-- `examples/dev-container` still shows the older single-`/anthropic/key`,
-  API-key-only shape. It works, and it is what to diff against if that is
-  the example a deployment was generated from, but don't copy it into a new
-  Claude Code stack.
+- Both examples now show this shape. A deployment generated before 1.4.0
+  from `examples/dev-container` may still carry the older single
+  `/anthropic/key` route with `x-api-key` injection — it keeps working, but
+  it cannot use an OAuth token, so move it across on the next
+  reconciliation rather than leaving it.
 
 ### Cloudflare
 
@@ -261,18 +262,29 @@ the events simply never exist. Whenever you add a provider or addon, add the
 `logEvent`/`log_event` calls described under "A custom provider" in the same
 edit.
 
-**What is safe to log.** The trail is a plaintext file on a shared volume
-that `observer` renders over HTTP, so a credential written into it has left
-the boundary the rest of this stack exists to maintain. Log the shape of
-what happened: host, method, provider, decision, credential *type*, and any
-identifier you have parsed out yourself. Never log request or response
-headers, bodies, or query strings.
+**What is safe to log — and who guarantees it.** The trail is a plaintext
+file on a shared volume that `observer` renders over HTTP, so a credential
+written into it has left the boundary the rest of this stack exists to
+maintain. Note where that responsibility sits: the images contribute no
+events of their own, so every line in the trail was written by a provider or
+addon file *this deployment owns*. `observer` is exactly as leak-free as
+those files are, and nothing upstream of it can make an unsafe event safe.
+It is the one component whose security you inherit rather than receive.
+
+So log values you chose yourself: host, method, provider, decision,
+credential *type*, and any identifier you parsed out. Anything you did not
+construct — request or response headers, bodies, query strings, exception
+messages — is free text from somewhere else, and belongs on stdout, which is
+not the volume `observer` serves.
 
 Paths need a judgement call, because some providers put the credential in
 the URL rather than a header — Telegram's is `/bot<TOKEN>/<method>`, and
-`?access_token=` query strings are the same shape. For those, logging
-`flow.request.path` writes a live credential to disk. Parse the part you
-actually want instead:
+`?access_token=` query strings are the same shape. Two things make the raw
+path riskier than it looks: **mitmproxy's `flow.request.path` includes the
+query string**, so "I only logged the path" is not the guarantee it sounds
+like, and a path segment that is safe today can start carrying an id or a
+token when the provider adds an endpoint. Parse out the part you actually
+want:
 
 ```python
 # Telegram: /bot<TOKEN>/<METHOD> — never log the path itself
@@ -280,20 +292,27 @@ api_method = flow.request.path.split("/")[2]
 audit.log_event("cred_injected", provider="telegram", api_method=api_method)
 ```
 
-Logging the raw path is fine for a provider that authenticates by header
-only — the shipped `020_anthropic.py` records `path=/v1/messages`, which
-carries no secret. Establish which kind of provider you are dealing with
-before deciding, and default to parsing if unsure.
+The shipped addons do this too — see `_endpoint()` in `020_anthropic.py`,
+which drops the query string and keeps the first two segments, so the trail
+records `/v1/messages` rather than `/v1/messages/batches/<id>?beta=…`. Copy
+that shape, but pick the slice for *your* provider: the segments that are
+safe to keep are exactly what differs between Anthropic and Telegram, which
+is why there is no shared helper for it in `audit.py`.
+
+Logging the raw path is defensible for a provider that authenticates by
+header only and has no ids in its URLs — but establish that it is that kind
+of provider before deciding, and default to parsing if unsure. The parsed
+form costs one function and never has to be revisited when the provider
+grows an endpoint that carries something.
 
 **Log the refusals, not just the successes.** Every error return needs an
 event too — a missing credential file, an unparseable one, a provider API
 that returned 401, a request the addon blocked. A trail that records only
 what worked is worse than misleading during an incident: absence of an event
-reads as "never happened" when it means "happened, and was refused." The
-shipped providers are stronger on this for blocks than for failures —
-`000_policy.py` logs its 403, while `examples/claude-code/broker/anthropic.js`
-returns 500 on a missing credential without logging anything — so don't take
-their success-path calls as the complete pattern to copy.
+reads as "never happened" when it means "happened, and was refused." Name
+the failure with a value you defined — a reason string of your own, or the
+exception's `code`/`name` — rather than quoting its message, which is the
+same free text the rule above is about.
 
 ### Last step: record the provenance
 
@@ -394,9 +413,29 @@ paperwork.
    entry's "Upgrading" section. Manual steps in a skipped intermediate
    release still apply.
 3. Diff every bind-mounted file against the new tag and port the
-   differences in by hand. Most upstream counterparts live under
-   `examples/` — `stack/broker/providers/` and `stack/cred-gateway/gateway.d/`
-   hold only a README, since content is what the deployment supplies.
+   differences in by hand.
+
+   `scripts/check-drift.sh` does the comparison for you, including the
+   counterpart resolution the rest of this step describes. It needs nothing
+   but bash, git and diff, and it reads the deployment's own pin and
+   provenance stub:
+
+   ```bash
+   # From a checkout of this repo, against your deployment directory:
+   scripts/check-drift.sh --to "$NEW" /path/to/deployment
+   scripts/check-drift.sh --to "$NEW" --show-diff /path/to/deployment  # with hunks
+   ```
+
+   It exits non-zero on drift or a missing `000_policy.py`, so it also works
+   as a pre-upgrade gate in CI. Custom providers are reported as `custom`
+   and don't fail the run — they can't drift, since they have nothing to
+   drift from, but step 4 still applies to them.
+
+   The rest of this step is what the script automates, and what to do by
+   hand if you're upgrading *from* a tag before 1.4.0 that doesn't ship it.
+   Most upstream counterparts live under `examples/` —
+   `stack/broker/providers/` and `stack/cred-gateway/gateway.d/` hold only a
+   README, since content is what the deployment supplies.
    `stack/proxy/addons/` is the exception and needs a second diff of its
    own, below:
 

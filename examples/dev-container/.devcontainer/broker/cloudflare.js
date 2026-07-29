@@ -89,7 +89,13 @@ async function mintCloudflareToken(profile) {
 module.exports = {
   "/cloudflare/token": async (url, send) => {
     const profile = url.searchParams.get("profile");
-    if (!profile) return send(400, { error: "profile parameter required" });
+    if (!profile) {
+      logEvent("request_rejected", {
+        provider: "cloudflare",
+        reason: "missing_profile",
+      });
+      return send(400, { error: "profile parameter required" });
+    }
     const t = await mintCloudflareToken(profile);
     console.log(
       `[broker] issued cloudflare token profile=${profile} (expires ${t.expiresAt})`,
