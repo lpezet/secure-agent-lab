@@ -165,6 +165,22 @@ for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_githu
   else ko "$f — matches github.com" "$bad"; fi
 done
 
+suite "addons log a parsed endpoint, never a raw request path"
+# The trail is a plaintext file that observer serves over HTTP, and
+# mitmproxy's flow.request.path includes the query string. For a provider
+# that carries its credential in the URL — Telegram's /bot<TOKEN>/<method>,
+# an ?access_token= elsewhere — `path=flow.request.path` writes a live
+# credential into it. These addons are also what gets copied when someone
+# adds a provider, so the shipped pattern has to be the safe one.
+# Backticked mentions are prose (the addons explain the anti-pattern in their
+# own docstrings), so only real keyword arguments count.
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  bad=$(grep -n 'path=flow\.request\.path' "$f" | grep -v '`' || true)
+  if [ -z "$bad" ]; then ok "$(basename "$f") — no raw path in an audit event"
+  else ko "$f — logs a raw request path" "$bad"; fi
+done
+
 suite "policy addon loads before provider addons"
 # 000_policy.py must run first; entrypoint.sh globs alphabetically.
 for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do

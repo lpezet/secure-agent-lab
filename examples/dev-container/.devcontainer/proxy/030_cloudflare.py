@@ -20,6 +20,20 @@ def _get_token(profile: str) -> str:
     return _cache[profile]
 
 
+def _endpoint(flow: http.HTTPFlow) -> str:
+    """A loggable identifier for what was called, never the raw path.
+
+    flow.request.path includes the query string, and Cloudflare paths carry
+    account and zone ids (/client/v4/zones/<zone_id>/...). Keeping the first
+    three segments names the API surface without writing ids — or, in an addon
+    adapted for a provider that puts its credential in the URL, a live secret —
+    into a trail that observer serves over HTTP. See 020_anthropic.py for the
+    longer note on choosing a safe slice.
+    """
+    parts = [p for p in flow.request.path.split("?", 1)[0].split("/") if p][:3]
+    return "/" + "/".join(parts)
+
+
 def request(flow: http.HTTPFlow) -> None:
     # flow.request.host is the real destination. Do NOT use pretty_host here:
     # it prefers the client-supplied Host header, so the dev container could
@@ -32,9 +46,9 @@ def request(flow: http.HTTPFlow) -> None:
     profile = flow.request.headers.pop("X-Cf-Profile", DEFAULT_PROFILE)
     flow.request.headers["Authorization"] = f"Bearer {_get_token(profile)}"
     ctx.log.info(
-        f"cloudflare: {flow.request.method} {flow.request.path} (profile={profile})"
+        f"cloudflare: {flow.request.method} {_endpoint(flow)} (profile={profile})"
     )
     audit.log_event(
         "token_injected", provider="cloudflare", profile=profile,
-        method=flow.request.method, path=flow.request.path,
+        method=flow.request.method, endpoint=_endpoint(flow),
     )
