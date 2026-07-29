@@ -165,6 +165,41 @@ for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_githu
   else ko "$f — matches github.com" "$bad"; fi
 done
 
+suite "only the policy addon references pretty_host in code"
+# The first invariant in CLAUDE.md, and until now the only one with no static
+# check: pretty_host prefers the client-supplied Host header, so matching on
+# it let `curl -H 'Host: api.anthropic.com' http://my-server/` collect a real
+# injected credential. tests/integration/20, 25 and 30 prove this at runtime,
+# which is coverage a deployment cannot run against its own addons.
+#
+# 000_policy.py is exempt, and it is the only file that is. It reads
+# `host in _INTERNAL_HOSTS or flow.request.pretty_host in _INTERNAL_HOSTS` —
+# pretty_host OR'd with the real host, to *widen* a block. Trusting a claimed
+# Host to deny more is safe; trusting it to permit or to route a credential is
+# the bug. Distinguishing those two by grep is not worth attempting, so the
+# rule is positional: that file is copied verbatim from stack/proxy/addons/
+# and check-drift.sh already enforces that it still matches.
+#
+# Comments and docstrings are stripped first — every shipped addon explains
+# this anti-pattern in its own prose, which is the point.
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  [ "$(basename "$f")" = "000_policy.py" ] && continue
+  bad=$(awk '
+    { line = $0; sub(/#.*$/, "", line) }
+    # Same-line docstrings ("""...""") close as fast as they open, so the
+    # block counter below never sees them. Drop them first, or every addon
+    # with a one-line docstring naming the anti-pattern reports itself.
+    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
+    { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
+    ds  { if (q % 2 == 1) ds = 0; next }
+    q % 2 == 1 { ds = 1; next }
+    line ~ /pretty_host/ { print NR ": " $0 }
+  ' "$f")
+  if [ -z "$bad" ]; then ok "$(basename "$f") — decides on flow.request.host"
+  else ko "$f — references pretty_host outside a comment" "$bad"; fi
+done
+
 suite "addons log a parsed endpoint, never a raw request path"
 # The trail is a plaintext file that observer serves over HTTP, and
 # mitmproxy's flow.request.path includes the query string. For a provider
@@ -179,6 +214,26 @@ for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/a
   bad=$(grep -n 'path=flow\.request\.path' "$f" | grep -v '`' || true)
   if [ -z "$bad" ]; then ok "$(basename "$f") — no raw path in an audit event"
   else ko "$f — logs a raw request path" "$bad"; fi
+done
+
+# Splitting the raw path on "/" is the same bug wearing a parse. Because
+# flow.request.path carries the query string, the last segment absorbs it:
+# on /bot<TOKEN>/sendMessage?chat_id=…&text=…, split("/")[2] is the message
+# body, not the method. The token sits in segment 1 and stays out, which is
+# what lets the mistake read as safe. The fix is ordering — split("?", 1)[0]
+# first — so the check is for a "/" split taken directly off the raw path.
+#
+# PLAYBOOK.md is in scope, and is why this exists: it shipped that exact
+# snippet as the *recommended* Telegram pattern from 1.2.0 to 1.4.1, in the
+# paragraph warning that the path includes the query string. A deployment
+# following it built the leak the release was written to prevent. Prose
+# mentions are backticked; code blocks are not.
+for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
+         stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  bad=$(grep -n 'flow\.request\.path\.split("/")' "$f" | grep -v '`' || true)
+  if [ -z "$bad" ]; then ok "$(basename "$f") — no \"/\" split off a raw path"
+  else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
 done
 
 suite "policy addon loads before provider addons"

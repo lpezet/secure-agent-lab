@@ -8,6 +8,61 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.4.2 — 2026-07-29
+
+### Fixed
+
+**`PLAYBOOK.md`'s Telegram snippet built the leak it warns about.** The
+"What is safe to log" section states in bold that `flow.request.path`
+includes the query string, and the code block directly under it then split
+the raw path on `/`:
+
+```python
+api_method = flow.request.path.split("/")[2]     # before
+```
+
+On `/bot<TOKEN>/sendMessage?chat_id=…&text=…` that returns the whole of
+`sendMessage?chat_id=…&text=…` — the recipient and the message body, written
+into the audit trail as if it were a method name, and served over HTTP by
+`observer`. The bot token is in segment 1 and never appeared, which is
+precisely what let the snippet read as safe: the comment above it says
+"never log the path itself", and it doesn't.
+
+Shipped as the recommended Telegram pattern from 1.2.0 through 1.4.1. The
+snippet now strips the query string before splitting and indexes
+defensively — an addon that raises on a malformed path takes the request
+down with it, and a short path is what a prober sends.
+
+Reported by a deployment maintainer whose own Telegram addon had followed
+it. Found while reconciling for 1.4.0 — the release about not logging raw
+paths, which could not tell them, because `check-drift.sh` correctly reports
+a custom addon as `custom` and diffs nothing. That structural gap is
+[#26](https://github.com/lpezet/secure-agent-lab/issues/26), for 1.5.0.
+
+### Added
+
+**A static check for `pretty_host`, the invariant that had none.** "Never
+use `flow.request.pretty_host` for a security decision" is the first
+non-obvious invariant in `CLAUDE.md`, with a real regression behind it —
+every addon originally matched `pretty_host`, so a spoofed `Host` header
+collected a real injected credential. Its only coverage was runtime
+(`tests/integration/20`, `25`, `30`), which is exactly what a deployment
+cannot run against its own addons.
+
+`000_policy.py` is exempt and is the only file that is: it ORs `pretty_host`
+with the real host to *widen* a block, and trusting a claimed `Host` to deny
+more is safe where trusting it to permit is not. The exemption is positional
+rather than semantic, since that file is copied verbatim and
+`check-drift.sh` already enforces that it matches.
+
+**Upgrading:** nothing in `stack/` changed and no image moved. If you wrote
+a custom addon by following the playbook's Telegram pattern, check it —
+`split("?", 1)[0]` before any `split("/")`. Both new checks run as part of
+`tests/run.sh`; making them runnable against a deployment's own files is
+[#26](https://github.com/lpezet/secure-agent-lab/issues/26).
+
+---
+
 ## 1.4.1 — 2026-07-29
 
 ### Fixed
