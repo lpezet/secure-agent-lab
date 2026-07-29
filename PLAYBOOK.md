@@ -262,12 +262,20 @@ the events simply never exist. Whenever you add a provider or addon, add the
 `logEvent`/`log_event` calls described under "A custom provider" in the same
 edit.
 
-**What is safe to log.** The trail is a plaintext file on a shared volume
-that `observer` renders over HTTP, so a credential written into it has left
-the boundary the rest of this stack exists to maintain. Log the shape of
-what happened: host, method, provider, decision, credential *type*, and any
-identifier you have parsed out yourself. Never log request or response
-headers, bodies, or query strings.
+**What is safe to log — and who guarantees it.** The trail is a plaintext
+file on a shared volume that `observer` renders over HTTP, so a credential
+written into it has left the boundary the rest of this stack exists to
+maintain. Note where that responsibility sits: the images contribute no
+events of their own, so every line in the trail was written by a provider or
+addon file *this deployment owns*. `observer` is exactly as leak-free as
+those files are, and nothing upstream of it can make an unsafe event safe.
+It is the one component whose security you inherit rather than receive.
+
+So log values you chose yourself: host, method, provider, decision,
+credential *type*, and any identifier you parsed out. Anything you did not
+construct — request or response headers, bodies, query strings, exception
+messages — is free text from somewhere else, and belongs on stdout, which is
+not the volume `observer` serves.
 
 Paths need a judgement call, because some providers put the credential in
 the URL rather than a header — Telegram's is `/bot<TOKEN>/<method>`, and
@@ -290,11 +298,10 @@ before deciding, and default to parsing if unsure.
 event too — a missing credential file, an unparseable one, a provider API
 that returned 401, a request the addon blocked. A trail that records only
 what worked is worse than misleading during an incident: absence of an event
-reads as "never happened" when it means "happened, and was refused." The
-shipped providers are stronger on this for blocks than for failures —
-`000_policy.py` logs its 403, while `examples/claude-code/broker/anthropic.js`
-returns 500 on a missing credential without logging anything — so don't take
-their success-path calls as the complete pattern to copy.
+reads as "never happened" when it means "happened, and was refused." Name
+the failure with a value you defined — a reason string of your own, or the
+exception's `code`/`name` — rather than quoting its message, which is the
+same free text the rule above is about.
 
 ### Last step: record the provenance
 

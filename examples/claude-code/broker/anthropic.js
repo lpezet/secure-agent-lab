@@ -30,6 +30,10 @@ module.exports = {
       logEvent("cred_issued", { provider: "anthropic", cred_type: "api_key" });
       return send(200, { type: "api_key", value: apiKey });
     }
+    console.error(
+      "[broker] no Anthropic credential file at ANTHROPIC_AUTH_TOKEN_PATH or ANTHROPIC_API_KEY_PATH",
+    );
+    logEvent("cred_unavailable", { provider: "anthropic" });
     send(500, { error: "no Anthropic credential configured" });
   },
 };

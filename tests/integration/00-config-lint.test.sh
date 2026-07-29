@@ -104,6 +104,56 @@ for pat in 'sk-ant-[A-Za-z0-9_-]{20,}' 'ghp_[A-Za-z0-9]{20,}' 'github_pat_[A-Za-
   else ko "credential-shaped string committed: /$pat/" "$hits"; fi
 done
 
+suite "audit events reference an exception only via .code or .name"
+# Not the security control. The audit trail is written entirely by whatever
+# provider and addon files a deployment mounts, and this suite cannot see
+# those — PLAYBOOK.md's "What is safe to log" is what reaches them. What this
+# guards is the files people copy: every generated stack starts by vendoring
+# an example, so the anti-pattern must not ship in one.
+#
+# An exception message is free text from whoever raised it, and providers
+# interpolate vendor responses into theirs (cloudflare.js: `Cloudflare API
+# error: ${JSON.stringify(result.errors)}`). Detail belongs on stdout, which
+# observer does not read.
+#
+# Allowlist, not blocklist. Enumerating the ways of writing "the error" loses
+# to the next one invented — String(err), `${err}`, err.toString(), err.cause,
+# str(exc), f"{e}" are all the same leak, and String(err) is what
+# stack/broker/server.js itself used before this suite existed. So: inside a
+# logEvent()/log_event() call, strip the field *names*, strip the two permitted
+# references, and flag any mention of the exception variable that survives.
+for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
+         examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
+         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+  [ -f "$f" ] || continue
+  bad=$(awk '
+    # Comments are prose (these files explain the anti-pattern in their own).
+    { line = $0; sub(/[[:space:]]*(\/\/|#).*$/, "", line) }
+    !inside && line ~ /log_?[Ee]vent\(/ { inside = 1; start = NR; buf = ""; depth = 0 }
+    inside {
+      buf = buf " " line
+      n = gsub(/\(/, "(", line); depth += n
+      n = gsub(/\)/, ")", line); depth -= n
+      if (depth > 0) next
+      inside = 0
+      t = buf
+      # Quoted literals are values, not references — "Error" is fine. Only
+      # brace-free ones though: an f-string is a reference wearing a literal
+      # and f"{e}" leaks exactly like str(e). Backticks are never stripped, so
+      # a template literal interpolating ${err} stays visible too.
+      gsub(/"[^"{}]*"/, "", t); gsub(/'"'"'[^'"'"'{}]*'"'"'/, "", t)
+      # Field names: `error:` in JS, error= in Python. A key is not a reference.
+      gsub(/(err|error|e|ex|exc)[[:space:]]*[:=]/, "", t)
+      # The two permitted references.
+      gsub(/(err|error|e|ex|exc)\.(code|name)/, "", t)
+      # Anything left that names the exception is the violation, whatever the
+      # syntax around it.
+      if (t ~ /(^|[^[:alnum:]_.])(err|error|e|ex|exc)([^[:alnum:]_]|$)/) print start ": " buf
+    }' "$f")
+  if [ -z "$bad" ]; then ok "$(basename "$f") — exception referenced safely or not at all"
+  else ko "$f — audit event can carry exception text" "$bad"; fi
+done
+
 suite "github addon does not match github.com"
 # Documented invariant: git push/pull authenticates through the credential
 # helper. Matching github.com here collides with git's Basic auth handshake
