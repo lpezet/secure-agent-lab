@@ -59,12 +59,15 @@ def request(flow: http.HTTPFlow) -> None:
                         endpoint=_endpoint(flow))
         return
 
-    cred_type, cred_value = _get_cred()
-
-    # Strip whichever auth headers the agent sent, then inject the real credential.
+    # Strip before fetching, not after. _get_cred() raises when the broker is
+    # unreachable, so fetching first means the strip never runs and the agent's
+    # own x-api-key or Authorization goes to Anthropic untouched — the opposite
+    # of what the strip is for.
     for h in ("x-api-key", "Authorization"):
         if h in flow.request.headers:
             del flow.request.headers[h]
+
+    cred_type, cred_value = _get_cred()
 
     if cred_type == "auth_token":
         flow.request.headers["Authorization"] = f"Bearer {cred_value}"

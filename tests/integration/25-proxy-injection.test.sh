@@ -155,6 +155,57 @@ else
   ko "cloudflare proxy did not start" "$(docker logs "$RUN_ID-cloudflare" 2>&1 | tail -20)"
 fi
 
+# ------------------------------------------------------ broker unreachable
+
+suite "client auth is stripped even when the broker is unreachable"
+# REGRESSION: stripping the client's header and injecting ours were the same
+# statement in 010_github/030_cloudflare, and in 020_anthropic the fetch ran
+# ahead of the strip loop. Either way the broker fetch raises first, so the
+# strip never happened and the agent's own Authorization/x-api-key was
+# forwarded to the vendor untouched — while the addon's comment said it was
+# stripped. Verified against the real addons before the fix: the echo server
+# received `token CLIENT-OWN-TOKEN-abc123` verbatim.
+#
+# Not a credential leak (nothing of ours escapes), but the stack states that
+# the proxy replaces whatever the client sent, and under broker failure that
+# did not hold. Fix is ordering: strip unconditionally, then fetch.
+#
+# Must run last and needs its own proxy. The addons cache for 5 minutes, so a
+# proxy that already injected successfully would serve from cache and never
+# touch the broker — the failure path would go untested.
+docker kill "$BK" >/dev/null 2>&1
+if run_proxy nobroker "$ADDONS/010_github.py" "$ADDONS/020_anthropic.py" \
+                      "$DC_ADDONS/030_cloudflare.py"; then
+  P="--proxy http://$RUN_ID-nobroker:8080"
+
+  body=$(http_body "http://api.github.com:8080/rate_limit" \
+    -H "Authorization: token CLIENT-OWN-TOKEN" $P)
+  check_not_contains "github: client Authorization does not reach the vendor" \
+    "$body" "CLIENT-OWN-TOKEN"
+
+  body=$(http_body "http://api.anthropic.com:8080/v1/messages" \
+    -H "x-api-key: CLIENT-OWN-KEY" $P)
+  check_not_contains "anthropic: client x-api-key does not reach the vendor" \
+    "$body" "CLIENT-OWN-KEY"
+
+  body=$(http_body "http://api.anthropic.com:8080/v1/messages" \
+    -H "Authorization: Bearer CLIENT-OWN-BEARER" $P)
+  check_not_contains "anthropic: client Authorization does not reach the vendor" \
+    "$body" "CLIENT-OWN-BEARER"
+
+  body=$(http_body "http://api.cloudflare.com:8080/client/v4/user" \
+    -H "Authorization: Bearer CLIENT-OWN-CF-TOKEN" $P)
+  check_not_contains "cloudflare: client Authorization does not reach the vendor" \
+    "$body" "CLIENT-OWN-CF-TOKEN"
+
+  # The request still goes through unauthenticated — this fix does not change
+  # the fail mode, only what the vendor receives. injection.fail_mode is a
+  # separate design question (see ROADMAP item 4).
+  check_contains "request still reaches the vendor, without auth" "$body" "RECEIVED-BY="
+else
+  ko "no-broker proxy did not start" "$(docker logs "$RUN_ID-nobroker" 2>&1 | tail -20)"
+fi
+
 rm -f "/tmp/$ECHO_CONF" "/tmp/$BROKER_CONF"
 rm -rf "/tmp/$RUN_ID"-*-addons
 

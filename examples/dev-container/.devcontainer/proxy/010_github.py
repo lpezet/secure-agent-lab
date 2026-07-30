@@ -32,7 +32,16 @@ def request(flow: http.HTTPFlow) -> None:
     if host not in ("api.github.com", "uploads.github.com"):
         return
 
-    # Strip any client-supplied auth (including the GH_TOKEN=proxy-injected dummy)
+    # Strip first, as its own statement. _get_token() raises when the broker is
+    # unreachable, so a single assignment that both strips and injects strips
+    # nothing on failure and forwards the agent's own Authorization header to
+    # GitHub untouched — the opposite of what the strip is for. Ordering is the
+    # whole fix: the strip is unconditional, and a failed fetch now sends no
+    # auth at all rather than the client's.
+    if "Authorization" in flow.request.headers:
+        del flow.request.headers["Authorization"]
+
+    # Inject the brokered token, replacing the GH_TOKEN=proxy-injected dummy.
     flow.request.headers["Authorization"] = f"token {_get_token()}"
     flow.request.headers["Accept"] = flow.request.headers.get(
         "Accept", "application/vnd.github+json"
