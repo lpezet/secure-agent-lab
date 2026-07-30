@@ -387,8 +387,13 @@ in them.
 **Proxy** — add a numbered file to the project's `proxy/` directory
 (bind-mounted to `/addons`, loaded alphabetically — pick a prefix that
 puts it after `000_policy.py`). Match `flow.request.host` against the
-exact provider hostname, fetch a token from the broker route added above,
-inject it, strip whatever the client sent. Cache with a short TTL. Pick it
+exact provider hostname, strip whatever the client sent, then fetch a
+token from the broker route added above and inject it. Strip *before*
+fetching, and never in the same statement as the injection: the fetch
+raises when the broker is unreachable, and a strip that happens after it
+(or inside the same assignment) does not happen at all — forwarding the
+agent's own credential to the provider, which is the opposite of the
+point. Cache with a short TTL. Pick it
 up with `docker compose up -d --force-recreate proxy` — `entrypoint.sh`
 auto-discovers `*.py` at startup. Use the baked-in `audit.py`
 (`import audit; audit.log_event(...)`) the same way.
