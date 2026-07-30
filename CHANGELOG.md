@@ -8,6 +8,63 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.4.3 — 2026-07-30
+
+### Fixed
+
+**All three injection addons forwarded the agent's own credential when the
+broker was unreachable.** Each one states that it replaces whatever the client
+sent. None of them did on the failure path, because stripping and injecting
+were the same statement:
+
+```python
+flow.request.headers["Authorization"] = f"token {_get_token()}"   # before
+```
+
+`_get_token()` raises when the broker cannot be reached, so neither half runs —
+not the injection, and not the strip. `020_anthropic.py` reached the same end
+by a different route: its fetch sat ahead of the strip loop, so the loop never
+ran either. Verified against the real addons with no broker reachable, the
+vendor received the client's header verbatim:
+
+```
+GOT auth=[token CLIENT-OWN-TOKEN-abc123]
+```
+
+Same for Anthropic's `x-api-key` and `Authorization`, and Cloudflare's bearer
+token.
+
+Scoped honestly: **not a credential leak.** Nothing of ours escapes, and the
+agent would need a token it already holds. What breaks is a property the stack
+states — that the proxy replaces client-supplied auth — so a dev container
+carrying its own credential could reach the vendor with it any time the broker
+was down.
+
+The fix is ordering, not error handling: strip unconditionally as its own
+statement, then fetch, then inject. **Fail mode is deliberately unchanged** —
+the request still goes out unauthenticated and the vendor still 401s, which is
+a signal the agent can act on. Making that configurable (`injection.fail_mode`)
+is design work rather than a patch.
+
+**`PLAYBOOK.md` carried the vulnerable ordering in prose** — "fetch a token
+from the broker route added above, inject it, strip whatever the client sent".
+The same copy-source failure as 1.4.2's Telegram snippet, one release later:
+the instructions for writing an addon described the bug, so a provider written
+by following them inherited it. Reordered, with the reason attached.
+
+New coverage in `tests/integration/25-proxy-injection.test.sh`. It has to run
+last and build its own proxy — the addons cache for five minutes, so a proxy
+that already injected successfully serves from cache, never reaches the broker,
+and leaves the failure path untested.
+
+**Upgrading:** nothing in `stack/` changed and no image moved. The changed
+files are `examples/*/proxy/*.py` and `PLAYBOOK.md`, which repinning does not
+deliver — the same bind-mount split 1.4.0 is about. If your deployment vendored
+these addons, apply the reorder to your own copies: the strip must be its own
+statement, and it must come before the broker fetch.
+
+---
+
 ## 1.4.2 — 2026-07-29
 
 ### Fixed

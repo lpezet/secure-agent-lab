@@ -44,6 +44,14 @@ def request(flow: http.HTTPFlow) -> None:
 
     # Allow caller to hint a profile via custom header (stripped before forwarding)
     profile = flow.request.headers.pop("X-Cf-Profile", DEFAULT_PROFILE)
+
+    # Strip first, as its own statement. _get_token() raises when the broker is
+    # unreachable, so a single assignment that both strips and injects strips
+    # nothing on failure and forwards the agent's own Authorization header to
+    # Cloudflare untouched — the opposite of what the strip is for.
+    if "Authorization" in flow.request.headers:
+        del flow.request.headers["Authorization"]
+
     flow.request.headers["Authorization"] = f"Bearer {_get_token(profile)}"
     ctx.log.info(
         f"cloudflare: {flow.request.method} {_endpoint(flow)} (profile={profile})"
