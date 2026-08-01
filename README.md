@@ -14,6 +14,8 @@ examples/
   claude-code/     Claude Code in a secured container — attach and use interactively
 scripts/        check-drift.sh — does a deployment's bind-mounted files still
                 match the tag it is pinned at?
+                check-invariants.sh — are a deployment's own files safe on
+                their own terms? (custom providers have nothing to diff)
 tests/          Regression suite — integration (no credentials) and e2e (real ones)
 ```
 

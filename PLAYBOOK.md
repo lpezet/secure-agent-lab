@@ -483,8 +483,22 @@ paperwork.
 
    It exits non-zero on drift or a missing `000_policy.py`, so it also works
    as a pre-upgrade gate in CI. Custom providers are reported as `custom`
-   and don't fail the run — they can't drift, since they have nothing to
-   drift from, but step 4 still applies to them.
+   and don't drift-fail — they can't drift, having nothing to drift from.
+
+   **They are still checked.** `check-drift.sh` now also runs
+   `scripts/check-invariants.sh`, which asks the other question: is each file
+   safe *on its own terms*? That needs no upstream, no tag and no network, so
+   it reaches exactly the files the diff cannot — the ones you wrote. It is
+   also runnable alone:
+
+   ```bash
+   scripts/check-invariants.sh /path/to/deployment
+   ```
+
+   A findings-free scan is **not** a pass. These are greps against a known
+   list; a provider can be unsafe in ways none of them anticipate, and
+   "What is safe to log" below is the standard. Set `SKIP_INVARIANTS=1` to
+   run drift alone.
 
    The rest of this step is what the script automates, and what to do by
    hand if you're upgrading *from* a tag before 1.4.0 that doesn't ship it.
