@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# proxy 000_policy.py: the dev container must not be able to tunnel to internal
+# proxy 000_policy.py: the lab container must not be able to tunnel to internal
 # services through the proxy. Docker network isolation is the primary control;
 # this addon is the defence-in-depth layer, and it is the one that is easy to
 # break by editing an addon.

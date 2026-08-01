@@ -20,12 +20,12 @@ for f in "${SNIPPETS[@]}"; do
 done
 
 suite "snippets do not expose raw-credential endpoints"
-# These hand the dev container a usable secret rather than spending it on
-# dev's behalf. They belong in a proxy addon, never in the gateway.
+# These hand the lab container a usable secret rather than spending it on
+# lab's behalf. They belong in a proxy addon, never in the gateway.
 for f in "${SNIPPETS[@]}"; do
   for path in /github/token /anthropic/key /anthropic/cred /cloudflare/token; do
     if grep -q "location[[:space:]]*=[[:space:]]*$path\b" "$f"; then
-      ko "$f — exposes $path" "raw credential reachable from dev"
+      ko "$f — exposes $path" "raw credential reachable from lab"
     else
       ok "$f — does not expose $path"
     fi
@@ -62,7 +62,7 @@ for c in examples/claude-code/compose.yaml examples/dev-container/.devcontainer/
   if grep -qE ':/etc/nginx/gateway\.d:ro( |$)' "$c"; then
     ok "$c — snippets mounted read-only at /etc/nginx/gateway.d"
   else
-    ko "$c — snippet mount missing or writable" "snippets are the whitelist; dev must not be able to edit them"
+    ko "$c — snippet mount missing or writable" "snippets are the whitelist; lab must not be able to edit them"
   fi
 done
 
@@ -78,7 +78,7 @@ else
   ko "$c — nested read-only bind missing" "agent could widen the proxy allowlist or gateway whitelist"
 fi
 
-suite "dev containers hold no real credentials"
+suite "lab containers hold no real credentials"
 # CLAUDE.md invariant: these are dummy values that satisfy client-side "am I
 # authenticated?" checks. The proxy strips and replaces them at the wire level.
 for c in "${COMPOSES[@]}"; do
@@ -264,20 +264,20 @@ for c in examples/claude-code/compose.yaml examples/dev-container/.devcontainer/
   fi
 done
 
-suite "dev mounts land in the container's HOME"
+suite "lab mounts land in the container's HOME"
 # When examples/claude-code stopped running as root, HOME moved to /home/agent
 # but the compose mounts stayed at /root/. Nothing failed loudly: Claude Code
 # read $HOME, found an empty directory, and quietly lost its settings and auth
 # on every recreate. Derive HOME from the Dockerfile rather than hardcoding it,
 # so this keeps working if the user is renamed again.
-CC_DOCKERFILE=examples/claude-code/dev/Dockerfile
+CC_DOCKERFILE=examples/claude-code/lab/Dockerfile
 CC_COMPOSE=examples/claude-code/compose.yaml
 if [ -f "$CC_DOCKERFILE" ] && [ -f "$CC_COMPOSE" ]; then
   home=$(grep -oP '^ENV HOME=\K\S+' "$CC_DOCKERFILE" | tail -1)
   if [ -z "$home" ]; then
-    skip "claude-code dev HOME" "no ENV HOME in $CC_DOCKERFILE — image uses the base default"
+    skip "claude-code lab HOME" "no ENV HOME in $CC_DOCKERFILE — image uses the base default"
   else
-    ok "claude-code dev HOME is $home"
+    ok "claude-code lab HOME is $home"
     # Every state mount the agent needs to write must sit under it.
     for m in .claude .claude.json .config; do
       target=$(grep -oE "\./workspace/${m//./\\.}:[^:[:space:]]+" "$CC_COMPOSE" | head -1 | cut -d: -f2)
@@ -287,7 +287,7 @@ if [ -f "$CC_DOCKERFILE" ] && [ -f "$CC_COMPOSE" ]; then
         check "workspace/$m mounts under $home" "$home/$m" "$target"
       fi
     done
-    check_not_contains "no dev mount targets /root" "$(grep -A20 '^  dev:' "$CC_COMPOSE")" ":/root/"
+    check_not_contains "no lab mount targets /root" "$(grep -A20 '^  lab:' "$CC_COMPOSE")" ":/root/"
   fi
 fi
 
@@ -312,7 +312,7 @@ for conf in "${AUDIT_COMPOSES[@]}"; do
   done
 done
 
-suite "observer and log-rotator stay off secure/dev"
+suite "observer and log-rotator stay off secure/lab"
 # Deliberately no `networks:` key for either — see CLAUDE.md. They still land
 # on Compose's implicit `default` network, but every other service declares
 # an explicit `networks:` list and never joins `default`, so that network

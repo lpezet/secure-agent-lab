@@ -60,7 +60,7 @@ services:
     environment:
       BROKER_URL: http://broker:8080
       AUDIT_LOG: /var/log/audit/proxy.jsonl
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test:
         [
@@ -80,10 +80,10 @@ services:
         condition: service_healthy
     volumes:
       # Extra whitelisted endpoints for custom providers. Host path only —
-      # must not be visible to the dev container.
+      # must not be visible to the lab container.
       - ./cred-gateway/gateway.d:/etc/nginx/gateway.d:ro
       - audit-logs:/var/log/audit
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
       interval: 5s
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
 
   # Reads the audit-logs volume and serves a live view of it on :9000. Not on
-  # the `secure` or `dev` network (no `networks:` key — see CLAUDE.md), and
+  # the `secure` or `lab` network (no `networks:` key — see CLAUDE.md), and
   # its published port is loopback-only: viewable from the host, not from
   # anywhere inside the stack.
   observer:
@@ -127,8 +127,8 @@ services:
       - audit-logs:/var/log/audit
     restart: unless-stopped
 
-  dev:
-    build: ./dev
+  lab:
+    build: ./lab
     depends_on:
       proxy:
         condition: service_healthy
@@ -148,13 +148,13 @@ services:
       GITHUB_IDENTITY_URL: http://cred-gateway/github/identity
       GH_TOKEN: proxy-injected
       CLOUDFLARE_API_TOKEN: proxy-injected
-    networks: [dev]
+    networks: [lab]
     command: sleep infinity
 
 networks:
   secure:
     driver: bridge
-  dev:
+  lab:
     driver: bridge
 
 volumes:

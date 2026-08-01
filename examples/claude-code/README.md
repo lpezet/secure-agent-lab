@@ -47,10 +47,10 @@ persists Claude Code's state (projects, memory, hooks) across container restarts
 
 ```bash
 docker compose up --build -d
-docker compose logs -f dev   # watch setup complete
+docker compose logs -f lab   # watch setup complete
 ```
 
-On startup `dev/entrypoint.sh` calls `setup.sh`, which:
+On startup `lab/entrypoint.sh` calls `setup.sh`, which:
 1. Trusts the mitmproxy CA cert (so Claude Code's HTTPS calls go through the proxy)
 2. Wires the git credential helper to cred-gateway
 3. Verifies the broker is unreachable (security boundary check)
@@ -75,13 +75,13 @@ dashboard, copy the `audit-logs` volume, the `AUDIT_LOG` env vars, and the
 Once setup completes, attach an interactive Claude Code session:
 
 ```bash
-docker compose exec -it dev claude
+docker compose exec -it lab claude
 ```
 
 Point it at a workspace repo:
 
 ```bash
-docker compose exec -it dev claude /workspace
+docker compose exec -it lab claude /workspace
 ```
 
 ## Commands
@@ -90,7 +90,7 @@ All commands run from `examples/claude-code/`.
 
 **Logs:**
 ```bash
-docker compose logs -f broker proxy cred-gateway dev
+docker compose logs -f broker proxy cred-gateway lab
 ```
 
 **Teardown** (removes volumes including the mitmproxy CA cert):
@@ -100,12 +100,12 @@ docker compose down -v
 
 **Open a shell in the container** (for debugging):
 ```bash
-docker compose exec dev bash
+docker compose exec lab bash
 ```
 
 **Re-run setup if it failed mid-way** (idempotent):
 ```bash
-docker compose exec dev /setup.sh
+docker compose exec lab /setup.sh
 ```
 
 **Restart after rotating a credential:**
@@ -124,7 +124,7 @@ docker compose up -d
 
 ## Testing the security boundary
 
-Run these from inside the container (`docker compose exec dev bash`):
+Run these from inside the container (`docker compose exec lab bash`):
 
 ```bash
 # 1. Broker must be unreachable directly from the container
@@ -171,7 +171,7 @@ volumes:
 
 ## Extending
 
-To drive Claude Code autonomously, replace `exec sleep infinity` in `dev/entrypoint.sh` with
+To drive Claude Code autonomously, replace `exec sleep infinity` in `lab/entrypoint.sh` with
 a channel listener that invokes:
 
 ```bash

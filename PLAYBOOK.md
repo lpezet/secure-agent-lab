@@ -53,7 +53,7 @@ under "Adding a credential provider" below.
   inside the MITM'd tunnel.
 - `cred-gateway`: exact-match routes for `/github/credential` and
   `/github/identity` only, proxying to the broker. Never expose
-  `/github/token` — that would hand the dev container a raw token.
+  `/github/token` — that would hand the lab container a raw token.
 - Dev container: wire `git config credential.helper` to
   `curl $GIT_CREDENTIAL_URL` (pointed at the cred-gateway route), set
   `credential.useHttpPath false` (the App's installation already scopes
@@ -86,7 +86,7 @@ API-key billing.
   `responseheaders` hook and set `flow.response.stream = True` there —
   touching `flow.response.content` on a streamed response buffers the
   entire SSE body instead of passing chunks through live.
-- No `cred-gateway` route — the raw credential is never exposed to the dev
+- No `cred-gateway` route — the raw credential is never exposed to the lab
   container.
 - Both examples now show this shape. A deployment generated before 1.4.0
   from `examples/dev-container` may still carry the older single
@@ -111,7 +111,7 @@ API-key billing.
 
 Produce:
 
-- A `compose.yaml` wiring `broker`, `proxy`, `cred-gateway`, `dev`, and
+- A `compose.yaml` wiring `broker`, `proxy`, `cred-gateway`, `lab`, and
   (if requested) `observer` + `log-rotator`, each pinned to `stack/<service>`
   at the chosen tag.
 - One directory per service, named after the service, holding only the
@@ -121,10 +121,10 @@ Produce:
   - `proxy/*.py` → `/addons` (numbered, e.g. `010_github.py`, load order is
     alphabetical)
   - `cred-gateway/*.conf` → `/etc/nginx/gateway.d`
-  - `dev/Dockerfile` extending `stack/dev`'s base image with any
+  - `lab/Dockerfile` extending `stack/lab`'s base image with any
     project-specific tools
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
-  `dev` (dev + proxy + cred-gateway). The dev container is never on
+  `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
 - `proxy/000_policy.py`, copied verbatim from `stack/proxy/addons/` at the
   pinned tag. The image ships no addons of its own — `/addons` exists only
@@ -162,9 +162,9 @@ being generated:
 - `cred-gateway` snippets must use exact-match `location = /path` blocks,
   never a prefix match — a prefix like `location /github/` exposes sibling
   routes that must stay broker-only.
-- Expose a `cred-gateway` route only if dev tooling genuinely needs raw
+- Expose a `cred-gateway` route only if lab tooling genuinely needs raw
   access to it — almost never. Raw provider tokens/keys must never be
-  reachable from the dev container.
+  reachable from the lab container.
 - The proxy's Dockerfile must not add `USER mitmproxy` — the base image's
   entrypoint needs to run as root initially to `usermod` the `mitmproxy`
   user before dropping privileges via `gosu`.
@@ -179,12 +179,12 @@ being generated:
   var instead is readable via `docker inspect` and `/proc/<pid>/environ`,
   leaks into any process dump or crash report, and tends to end up committed
   in a `.env`. Follow the same convention for custom providers.
-- If a dev-side CLI tool needs a placeholder credential to pass its own
+- If a lab-side CLI tool needs a placeholder credential to pass its own
   "am I authenticated" check (e.g. `gh`, `wrangler`), use an obvious dummy
   value and let the proxy inject the real one at the wire level — never
-  put a real credential in the dev container's environment.
+  put a real credential in the lab container's environment.
 - `observer` and `log-rotator` must have no `networks:` entry at all —
-  that's what keeps them off `secure` and `dev` (Compose's implicit
+  that's what keeps them off `secure` and `lab` (Compose's implicit
   `default` network ends up containing only the two of them, since every
   other service declares an explicit `networks:` list). Do not "fix" this
   by adding one.
@@ -398,7 +398,7 @@ up with `docker compose up -d --force-recreate proxy` — `entrypoint.sh`
 auto-discovers `*.py` at startup. Use the baked-in `audit.py`
 (`import audit; audit.log_event(...)`) the same way.
 
-**Cred-gateway** — only if dev tooling needs raw access to something the
+**Cred-gateway** — only if lab tooling needs raw access to something the
 broker/proxy path doesn't cover (rare). Add an exact-match snippet to the
 project's `cred-gateway/` directory (bind-mounted to
 `/etc/nginx/gateway.d`), proxying to a broker route. Pick it up with
@@ -534,7 +534,7 @@ paperwork.
 
 Run these against the live `docker compose` stack after generating or
 changing anything (adjust service names below if the generated
-`compose.yaml` names them differently than `dev`, `broker`, `proxy`,
+`compose.yaml` names them differently than `lab`, `broker`, `proxy`,
 `cred-gateway`, `observer`).
 
 **All services healthy:**
@@ -545,12 +545,12 @@ docker compose ps
 
 Every service should be `running`/`healthy`, none restarting.
 
-**Broker is unreachable from the dev container** — the core security
-boundary, since `dev` is not on the `secure` network:
+**Broker is unreachable from the lab container** — the core security
+boundary, since `lab` is not on the `secure` network:
 
 ```
-docker compose exec dev getent hosts broker                              # should fail to resolve
-docker compose exec dev curl -sS --max-time 3 http://broker:8080/healthz # should fail to connect
+docker compose exec lab getent hosts broker                              # should fail to resolve
+docker compose exec lab curl -sS --max-time 3 http://broker:8080/healthz # should fail to connect
 ```
 
 Both failing is the pass condition; either succeeding means the network
@@ -559,23 +559,23 @@ boundary is broken.
 **`cred-gateway` only serves whitelisted routes:**
 
 ```
-docker compose exec dev curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/definitely-not-a-real-path
+docker compose exec lab curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/definitely-not-a-real-path
 # expect 403
 
-docker compose exec dev curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/github/identity
+docker compose exec lab curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/github/identity
 # expect 200, only if github is configured
 ```
 
 **Each configured provider works end-to-end through the proxy**, using
-whatever client the dev container already has for it:
+whatever client the lab container already has for it:
 
 ```
-docker compose exec dev gh api /rate_limit   # github
-docker compose exec dev wrangler whoami      # cloudflare
+docker compose exec lab gh api /rate_limit   # github
+docker compose exec lab wrangler whoami      # cloudflare
 ```
 
 For Anthropic, the check is Claude Code (or whatever agent harness runs in
-the dev container) successfully making one real request — there usually
+the lab container) successfully making one real request — there usually
 isn't a separate CLI to probe with.
 
 **A spoofed `Host` header does not talk the proxy into forwarding to the
@@ -583,7 +583,7 @@ broker.** Plain HTTP through the proxy, so no certificate handling — and the
 second server the spoof needs to point at is one the stack already has:
 
 ```
-docker compose exec -T dev curl -s --max-time 8 --proxy http://proxy:8080 \
+docker compose exec -T lab curl -s --max-time 8 --proxy http://proxy:8080 \
   -H 'Host: api.anthropic.com' http://broker:8080/anthropic/cred
 # expect {"error":"internal host blocked by proxy policy"} — a 403 from 000_policy.py
 ```
@@ -597,7 +597,7 @@ never reaches it.
 **The Admin API block holds** (only if Anthropic is configured):
 
 ```
-docker compose exec -T dev curl -s https://api.anthropic.com/v1/organizations/me
+docker compose exec -T lab curl -s https://api.anthropic.com/v1/organizations/me
 # expect {"error":"Admin API blocked by proxy policy"} — 403 from 020_anthropic.py,
 # blocked at the proxy, so it costs no quota
 ```
@@ -608,7 +608,7 @@ deployment mounts one. `001_allowlist.py` is opt-in, and with no
 check passes vacuously on a stack that never enabled it:
 
 ```
-docker compose exec -T dev curl -s --proxy http://proxy:8080 http://neverallowed.example.com/
+docker compose exec -T lab curl -s --proxy http://proxy:8080 http://neverallowed.example.com/
 # expect {"error":"destination blocked by allowlist policy"}
 ```
 
