@@ -376,4 +376,89 @@ for i in "${!EXAMPLE_COMPOSES[@]}"; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# Suite A — bank manifests are well-formed.
+#
+# The constraints are read OUT OF the schema (required[], the load_band enum,
+# the name pattern) rather than restated here. Tightening the schema tightens
+# this suite in the same commit; restating them would let the two drift, which
+# is the same failure mode as the hardcoded route list this bank exists to
+# retire.
+#
+# This is not full JSON Schema validation — that would put a validator on the
+# host for the one suite that otherwise needs nothing but bash. jq is a soft
+# dependency: without it these checks skip and the rest of the lint still runs.
+# ---------------------------------------------------------------------------
+suite "bank manifests are well-formed"
+BANK_SCHEMA="bank/schema/provider.schema.json"
+bank_entries=(bank/*/)
+if ! command -v jq >/dev/null 2>&1; then
+  skip "bank manifest checks" "jq not installed"
+elif [ ! -f "$BANK_SCHEMA" ]; then
+  ko "bank schema present" "$BANK_SCHEMA missing"
+elif ! jq -e . "$BANK_SCHEMA" >/dev/null 2>&1; then
+  ko "bank schema is valid JSON" "$BANK_SCHEMA does not parse"
+else
+  ok "$BANK_SCHEMA parses"
+  req_fields=$(jq -r '.required[]' "$BANK_SCHEMA")
+  name_pat=$(jq -r '.properties.name.pattern' "$BANK_SCHEMA")
+  bands=$(jq -r '.properties.load_band.enum[]' "$BANK_SCHEMA")
+  # Every top-level property the schema knows about, so a stray key is caught
+  # even though we are not running a real validator.
+  known=$(jq -r '.properties | keys[]' "$BANK_SCHEMA")
+
+  found_entry=0
+  for d in "${bank_entries[@]}"; do
+    [ -d "$d" ] || continue
+    case "$d" in bank/schema/) continue ;; esac
+    found_entry=1
+    entry="${d%/}"; base="$(basename "$entry")"; man="$entry/provider.json"
+
+    if [ ! -f "$man" ]; then ko "$entry — has provider.json" "missing"; continue; fi
+    if ! jq -e . "$man" >/dev/null 2>&1; then ko "$man — valid JSON" "does not parse"; continue; fi
+
+    for f in $req_fields; do
+      if jq -e --arg k "$f" 'has($k)' "$man" >/dev/null; then ok "$man — has required .$f"
+      else ko "$man — missing required .$f" "schema requires it"; fi
+    done
+
+    mname=$(jq -r '.name // ""' "$man")
+    check "$man — .name matches directory name" "$mname" "$base"
+    if printf '%s' "$mname" | grep -qE "$name_pat"; then ok "$man — .name matches schema pattern"
+    else ko "$man — .name violates schema pattern" "$mname !~ $name_pat"; fi
+
+    ms=$(jq -r '.min_stack // ""' "$man")
+    if printf '%s' "$ms" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then ok "$man — .min_stack is semver ($ms)"
+    else ko "$man — .min_stack is not semver" "got '$ms'"; fi
+
+    lb=$(jq -r '.load_band // ""' "$man")
+    if printf '%s\n' $bands | grep -qx "$lb"; then ok "$man — .load_band in schema enum ($lb)"
+    else ko "$man — .load_band not in schema enum" "got '$lb', want one of: $(echo $bands)"; fi
+
+    for k in $(jq -r 'keys[]' "$man"); do
+      if printf '%s\n' $known | grep -qx "$k"; then ok "$man — .$k is a known field"
+      else ko "$man — unknown field .$k" "not in schema properties"; fi
+    done
+
+    # Files the manifest implies must exist, and no file may ride along that
+    # the manifest never mentions. Both directions: a missing addon breaks the
+    # install, a stray file is something nobody reviewed.
+    implied="provider.json broker/$base.js proxy/$base.py"
+    jq -e '.broker_routes[] | select(.exposed)' "$man" >/dev/null 2>&1 \
+      && implied="$implied cred-gateway/$base.conf"
+    ls=$(jq -r '.lab_setup // ""' "$man"); [ -n "$ls" ] && implied="$implied $ls"
+
+    for rel in $implied; do
+      if [ -f "$entry/$rel" ]; then ok "$entry/$rel exists"
+      else ko "$entry/$rel missing" "implied by the manifest"; fi
+    done
+    while IFS= read -r actual; do
+      rel="${actual#$entry/}"
+      if printf '%s\n' $implied | grep -qx "$rel"; then ok "$entry/$rel is implied by the manifest"
+      else ko "$entry/$rel is not implied by the manifest" "stray file in a bank entry"; fi
+    done < <(find "$entry" -type f | sort)
+  done
+  [ "$found_entry" = 0 ] && skip "bank entries" "none present yet — step 2 of #32"
+fi
+
 finish
