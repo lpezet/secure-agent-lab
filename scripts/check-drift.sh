@@ -287,11 +287,38 @@ fi
 printf '%ssummary%s     %d drift · %d missing · %d custom · %d note\n' "$B" "$N" \
   "$DRIFT" "$MISSING" "$CUSTOM" "$NOTE"
 
-if [ "$((DRIFT + MISSING))" -gt 0 ]; then
-  printf '\nReconcile with PLAYBOOK.md "Upgrading" step 3, then update the stub'\''s\n'
-  printf '`Reconciled:` line. Custom files are yours: no upstream fix reaches them.\n'
+# ------------------------------------------------------------- invariant scan
+#
+# Drift answers "does your copy match ours?". For a custom file there is no
+# ours, so it answers `custom` and diffs nothing — which is how a deployment
+# reconciled everything this script reported and still had two of its own addons
+# writing secrets into the audit trail (#26).
+#
+# So the second question gets asked here rather than left to be remembered:
+# is each file safe on its own terms? Same library the upstream lint uses.
+INV_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-invariants.sh"
+INV_RC=0
+if [ "${SKIP_INVARIANTS:-0}" = 1 ]; then
+  :
+elif [ -x "$INV_SH" ] || [ -f "$INV_SH" ]; then
+  printf '\n'
+  bash "$INV_SH" --quiet "$DEPLOY" || INV_RC=$?
+else
+  note "check-invariants.sh" "not found beside this script — invariants not scanned"
+fi
+
+if [ "$((DRIFT + MISSING))" -gt 0 ] || [ "$INV_RC" != 0 ]; then
+  [ "$((DRIFT + MISSING))" -gt 0 ] && {
+    printf '\nReconcile with PLAYBOOK.md "Upgrading" step 3, then update the stub'\''s\n'
+    printf '`Reconciled:` line. Custom files are yours: no upstream fix reaches them.\n'
+  }
+  [ "$INV_RC" != 0 ] && {
+    printf '\nThe invariant findings above are in files this script cannot diff.\n'
+    printf 'They are yours to fix; PLAYBOOK.md "What is safe to log" is the standard.\n'
+  }
   exit 1
 fi
-printf '\nNo drift. Custom files above are still yours to review against the\n'
-printf 'generation constraints when an addon or provider fix lands upstream.\n'
+printf '\nNo drift, no invariant findings. Custom files are still yours to review\n'
+printf 'against the generation constraints — these checks are a known list, not\n'
+printf 'a review, and cannot see a way of being unsafe nobody has thought of.\n'
 exit 0

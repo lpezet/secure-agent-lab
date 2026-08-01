@@ -143,6 +143,27 @@ check_contains "unmatched file reads as custom" "$out" "040_acme.py"
 check_contains "and is named as owned" "$out" "no upstream counterpart"
 rm -f "$d/proxy/040_acme.py"
 
+suite "drift also asks the invariant question"
+# #26: a clean drift run used to read as a pass while custom files leaked.
+# check-drift now invokes check-invariants.sh, so a deployment with zero drift
+# and a leaking custom addon fails.
+d=$(mkdep withleak)
+cat > "$d/proxy/090_leaky.py" <<'ADDON'
+import audit
+def request(flow):
+    audit.log_event("cred_injected", provider="x", path=flow.request.path)
+ADDON
+out=$(run "$d")
+check_contains "no drift is reported" "$out" "0 drift"
+check_contains "the custom file is still named custom" "$out" "custom  090_leaky.py"
+check_contains "but the leak is reported too" "$out" "logs a raw request path"
+check_contains "and the run fails" "$out" "EXIT=1"
+
+suite "the invariant scan can be skipped without disabling drift"
+out=$(SKIP_INVARIANTS=1 run "$d")
+check_contains "exits 0 with only the leak suppressed" "$out" "EXIT=0"
+check_not_contains "no invariant findings printed" "$out" "logs a raw request path"
+
 suite "refuses a directory that is not a deployment"
 mkdir -p "$TMPD/empty"
 out=$(run "$TMPD/empty")
