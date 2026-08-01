@@ -42,7 +42,7 @@ services:
       - proxy-certs:/home/mitmproxy/.mitmproxy
     environment:
       BROKER_URL: http://broker:8080
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test:
         [
@@ -62,9 +62,9 @@ services:
         condition: service_healthy
     volumes:
       # Whitelisted endpoints. Host path only — must stay outside whatever
-      # is mounted at /workspace in dev, or the agent could widen it.
+      # is mounted at /workspace in lab, or the agent could widen it.
       - ./cred-gateway:/etc/nginx/gateway.d:ro
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
       interval: 5s
@@ -73,9 +73,9 @@ services:
       start_period: 3s
     restart: unless-stopped
 
-  dev:
+  lab:
     build:
-      context: ./dev
+      context: ./lab
       args:
         CLAUDE_VERSION: ${CLAUDE_VERSION:-latest}
     depends_on:
@@ -86,7 +86,7 @@ services:
     volumes:
       - proxy-certs:/proxy-certs:ro
       # These must target the container's HOME, which is /home/agent since the
-      # dev image stopped running as root. Mounting them at /root/ leaves them
+      # lab image stopped running as root. Mounting them at /root/ leaves them
       # somewhere Claude Code never looks: it reads $HOME, so settings and auth
       # state silently do not survive a container recreate.
       # tests/integration/00-config-lint asserts these against the Dockerfile.
@@ -108,13 +108,13 @@ services:
       # Dummy values — proxy strips these and injects real credentials
       ANTHROPIC_API_KEY: proxy-injected
       GH_TOKEN: proxy-injected
-    networks: [dev]
+    networks: [lab]
     restart: unless-stopped
 
 networks:
   secure:
     driver: bridge
-  dev:
+  lab:
     driver: bridge
 
 volumes:

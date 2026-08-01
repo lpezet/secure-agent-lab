@@ -79,7 +79,7 @@ repo ships and cannot drift from a copy of it.
 
 Two additions a real deployment does not have: an `echo` service aliased to
 `attacker-host`, which reflects request headers so a test can see what the
-proxy sent and to whom; and `command: sleep infinity` on `dev`, since there is
+proxy sent and to whom; and `command: sleep infinity` on `lab`, since there is
 no devcontainer lifecycle to hold it open. `run.sh` performs the two steps
 `setup.sh` would have done — trusting the CA and wiring the credential helper.
 
@@ -87,7 +87,7 @@ no devcontainer lifecycle to hold it open. `run.sh` performs the two steps
 
 | | Covers |
 |---|---|
-| `10-boundary` | Broker unresolvable and unroutable from dev, no tunnel through the proxy (including with a spoofed `Host`), cred-gateway allows exactly two paths, dummy env values intact, nothing credential-shaped in dev's environment or git config |
+| `10-boundary` | Broker unresolvable and unroutable from lab, no tunnel through the proxy (including with a spoofed `Host`), cred-gateway allows exactly two paths, dummy env values intact, nothing credential-shaped in lab's environment or git config |
 | `20-injection` | Anthropic and GitHub over real HTTPS with no credential in the request, SSE not buffered, Admin API blocked, and the pre-fix exploit — claim to be the vendor, deliver to your own server — leaking nothing |
 | `30-git` | Identity from the broker, clone over HTTPS via the credential helper, no token persisted into `.git/config`, push a scratch branch, verify it landed, delete it |
 

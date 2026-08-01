@@ -28,10 +28,10 @@ docker compose -f compose.yaml up -d --force-recreate cred-gateway
 
 - **Exact match (`location = /path`), never prefix match.** `location /github/`
   would expose every broker route under that prefix, including `/github/token`
-  — which hands dev a raw installation token.
-- **Only expose what a dev-side *tool* must hold locally** — credential helpers,
+  — which hands lab a raw installation token.
+- **Only expose what a lab-side *tool* must hold locally** — credential helpers,
   identity for `git config`. If the credential is only ever spent on an outbound
-  API call, it belongs in a proxy addon instead, so dev never sees it. This is
+  API call, it belongs in a proxy addon instead, so lab never sees it. This is
   why `/anthropic/key` and `/cloudflare/token` have no snippet here.
 - **The mount source must sit outside whatever is mounted at `/workspace`.**
   Otherwise the agent can widen its own whitelist and wait for a restart. See
