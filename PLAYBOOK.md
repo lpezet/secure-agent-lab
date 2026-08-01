@@ -35,77 +35,73 @@ whether something already there should be kept, replaced, or extended.
 
 ## Known providers
 
-Concrete shape for the providers this stack already ships support for.
-Anything not listed here is a custom provider — see "A custom provider"
-under "Adding a credential provider" below.
+Each of these ships as a **bank entry** under [`bank/`](bank/) — the files
+themselves, plus a `provider.json` manifest declaring what they need. Install
+one by copying it (see "A known provider" below); do not retype it from a
+description.
+
+| Provider | Injects into | Exposed to lab | Entry |
+|---|---|---|---|
+| GitHub | `api.github.com`, `uploads.github.com` | `/github/credential`, `/github/identity` | [`bank/github/`](bank/github/) |
+| Anthropic | `api.anthropic.com` | nothing | [`bank/anthropic/`](bank/anthropic/) |
+| Cloudflare | `api.cloudflare.com` | nothing | [`bank/cloudflare/`](bank/cloudflare/) |
+
+Hosts, broker routes, env vars and secret files are **not** listed here — they
+are in each entry's `provider.json`, which is the thing the lint checks against
+the code. Duplicating them into prose is how the two drift.
+
+What follows is the part a manifest cannot express: why each entry is shaped
+the way it is. Read it before changing one.
 
 ### GitHub
 
-- Broker routes: `/github/token` (installation token, 5-minute safety-window
-  cache), `/github/credential` (same token, `git credential` output
-  format), `/github/identity` (App name + email for `git config`, cached
-  for the broker's lifetime — restart the broker if the GitHub App is
-  renamed).
-- Proxy (`010_github.py`): matches `api.github.com` and `uploads.github.com`
-  only. Never match `github.com` — git push/pull to it goes through the
-  HTTPS credential helper (via `cred-gateway`), not token injection; adding
-  `github.com` here would conflict with git's own Basic-auth handshake
-  inside the MITM'd tunnel.
-- `cred-gateway`: exact-match routes for `/github/credential` and
-  `/github/identity` only, proxying to the broker. Never expose
-  `/github/token` — that would hand the lab container a raw token.
-- Dev container: wire `git config credential.helper` to
-  `curl $GIT_CREDENTIAL_URL` (pointed at the cred-gateway route), set
-  `credential.useHttpPath false` (the App's installation already scopes
-  which repos it can reach — intentional, not a bug), force `gh` to HTTPS
-  (`gh config set git_protocol https`) so it can't bypass the proxy over
-  SSH, and set `git config user.name`/`user.email` from the
-  `/github/identity` route on every container start.
+- **Never match `github.com` in the addon** — only `api.` and `uploads.`. Git
+  push/pull to `github.com` authenticates through the HTTPS credential helper
+  (via `cred-gateway`), not header injection, and adding it here collides with
+  git's own Basic-auth handshake inside the MITM'd tunnel.
+- **Never expose `/github/token`** through cred-gateway. It is the raw
+  installation token; the two exposed routes hand over a `git credential`
+  response and an identity, not a reusable secret.
+- **`credential.useHttpPath false` is deliberate.** Git otherwise puts the repo
+  path in the credential lookup key, re-invoking the helper per path against a
+  gateway route that is exact-match and path-agnostic. The App installation
+  already scopes which repos are reachable. This is set by
+  [`bank/github/lab/setup.sh`](bank/github/lab/setup.sh), which is also why
+  that fragment is part of the entry rather than a step in this document.
+- **`/github/identity` is cached for the broker's lifetime**, not on a TTL.
+  Restart the broker if the App is renamed.
 
 ### Anthropic (Claude Code)
 
-**Claude Code's active credential is usually an OAuth token, not an API
-key.** A Claude subscription authenticates with `sk-ant-oat01-…`, sent as
+**Claude Code's active credential is usually an OAuth token, not an API key.**
+A Claude subscription authenticates with `sk-ant-oat01-…` sent as
 `Authorization: Bearer`, on a different rate-limit tier from an API key
-(`sk-ant-api03-…`, sent as `x-api-key`). Both work; injecting the wrong one
-is not an error, it silently bills and throttles differently. Generate the
-credential-type-aware shape below unless the end-user has said they want
-API-key billing.
+(`sk-ant-api03-…`, sent as `x-api-key`). Both work; injecting the wrong one is
+not an error, it silently bills and throttles differently. The entry handles
+both — `ANTHROPIC_AUTH_TOKEN_PATH` wins over `ANTHROPIC_API_KEY_PATH`, so
+switching to OAuth is a file change and nothing else. Both are `optional` in the
+manifest precisely because exactly one of them is normally set.
 
-- Broker route: `/anthropic/cred` — returns `{type, value}`, reading the
-  credential file fresh on each call (cheap local read, no need to cache).
-  Prefer `ANTHROPIC_AUTH_TOKEN_PATH` (`type: "auth_token"`) and fall back to
-  `ANTHROPIC_API_KEY_PATH` (`type: "api_key"`), so dropping in an OAuth
-  token is a file change and nothing else. `examples/claude-code/broker/anthropic.js`
-  is the reference implementation.
-- Proxy (`020_anthropic.py`): matches `api.anthropic.com` only. Strips both
-  `x-api-key` and `Authorization` from whatever the client sent, then
-  injects by type — `auth_token` → `Authorization: Bearer <value>`,
-  `api_key` → `x-api-key: <value>` plus a default `anthropic-version`
-  header. Blocks `/v1/organizations/*` (Admin API). Must use the
-  `responseheaders` hook and set `flow.response.stream = True` there —
-  touching `flow.response.content` on a streamed response buffers the
-  entire SSE body instead of passing chunks through live.
-- No `cred-gateway` route — the raw credential is never exposed to the lab
-  container.
-- Both examples now show this shape. A deployment generated before 1.4.0
-  from `examples/dev-container` may still carry the older single
-  `/anthropic/key` route with `x-api-key` injection — it keeps working, but
-  it cannot use an OAuth token, so move it across on the next
-  reconciliation rather than leaving it.
+- **The addon must use the `responseheaders` hook with
+  `flow.response.stream = True`**, not `response`. Touching
+  `flow.response.content` on a streamed response buffers the entire SSE body
+  instead of passing chunks through live.
+- **`/v1/organizations/*` (the Admin API) is blocked at the proxy**, so an
+  attempt costs no quota.
+- A deployment generated before 1.4.0 from `examples/dev-container` may still
+  carry the older single `/anthropic/key` route with `x-api-key` injection. It
+  keeps working but cannot use an OAuth token. Move it to the bank entry on the
+  next reconciliation rather than leaving it — `check-drift.sh` will show the
+  old file as having no counterpart.
 
 ### Cloudflare
 
-- Broker route: `/cloudflare/token?profile=` — mints a scoped token via the
-  Cloudflare API per named profile, cached per profile.
-- Proxy (`030_cloudflare.py`): matches `api.cloudflare.com` only, injects
-  the token. The caller can hint a profile via an `X-Cf-Profile` header,
-  stripped before forwarding to Cloudflare; default profile is
-  `workers-deploy` if the header is absent.
-- No `cred-gateway` route.
-- Dev container: `CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy value
-  satisfying `wrangler`'s "am I authenticated" check — never replace it
-  with a real token.
+- **The token is minted per named profile**, not read off disk. `X-Cf-Profile`
+  hints which one; it is stripped before forwarding. Absent, the default is
+  `workers-deploy`. Add profiles inside the broker provider, where the
+  permission-group IDs live.
+- **`CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy** satisfying `wrangler`'s
+  "am I authenticated" check. Never replace it with a real token.
 
 ## Generating a stack
 
@@ -359,10 +355,42 @@ Update it as part of the upgrade, not after.
 
 ### A known provider
 
-Follow the concrete shape under "Known providers" above: add the
-broker/proxy/(rarely) cred-gateway files it describes, recreate the affected
-services (`docker compose up -d --force-recreate broker proxy`), then run the
-relevant check from "Verifying the stack" below.
+Copy the files, do not retype them. `<name>` is a directory under
+[`bank/`](bank/); everything the install needs is in its `provider.json`.
+
+1. **Check the pin.** If the entry's `min_stack` is above the tag your
+   `compose.yaml` builds from, stop — the install will look fine and fail at
+   runtime with `MODULE_NOT_FOUND` on `require("../audit")`. Repin first.
+2. **Copy** `bank/<name>/broker/<name>.js` → your `broker/`, and
+   `bank/<name>/cred-gateway/<name>.conf` → your `cred-gateway/` if the entry
+   has one.
+3. **Copy the addon with a prefix**: `bank/<name>/proxy/<name>.py` → your
+   `proxy/NNN_<name>.py`. Pick the lowest unused multiple of ten in the entry's
+   `load_band` — `provider` means 010–899. The bank ships no prefix because the
+   number is yours, not the entry's: two providers both wanting `030` would
+   otherwise be your problem to discover.
+4. **Secrets**: for each `secrets[]` entry, put the value in a file at
+   `<secrets-dir>/<file>` mode `0600` and add `<env>: /secrets/<file>` to the
+   broker's `environment:`.
+5. **Config**: for each `config[]` entry, add `<env>=` to `.env`.
+6. **Lab environment**: merge `lab_env` into the lab service's `environment:`.
+   These are literals — `proxy-injected` and URLs. A real credential here is a
+   bug, and `tests/integration/00-config-lint.test.sh` fails on one.
+7. **Lab setup**: if the entry has `lab_setup`, copy it into your `lab/` and
+   make sure your `setup.sh` runs it.
+8. **Allowlist**: append the entry's `hosts` to `/etc/agent-allowlist` if you
+   use one.
+9. **Restart, then verify**:
+   ```bash
+   docker compose up -d --force-recreate broker proxy cred-gateway
+   ```
+   then run the matching check from "Verifying the stack" below.
+
+Record what you installed in `.sal/installed.json` — name, assigned `NNN`,
+files written — so `check-drift.sh` compares exactly those entries rather than
+falling back to guessing which example you started from. Without it, drift
+still resolves by filename, which works but degrades on a deployment carrying
+many custom files.
 
 ### A custom provider
 
@@ -373,7 +401,15 @@ entry describes a fix to an addon or provider, the fix applies to your
 custom ones too and you have to port it by hand. Say so to the end-user at
 the time you add one — that is the deal they are accepting.
 
-For anything not covered above:
+**Start from the closest bank entry.** Copy `bank/<nearest>/` and edit it,
+rather than writing from this description. Every entry already has the host
+matching, the strip-before-fetch ordering, the bounded endpoint label and the
+audit calls in the right shape — which is the whole reason they exist, because
+each of those has been got wrong here at least once. Pick by resemblance:
+`anthropic` for "read a credential, inject a header", `cloudflare` for "mint
+something scoped per call", `github` for "the lab also needs a helper".
+
+Then, for anything the bank does not cover:
 
 **Broker** — add a file to the project's `broker/` directory (bind-mounted
 to `/app/providers`). Reads a credential from an env-var-specified path
