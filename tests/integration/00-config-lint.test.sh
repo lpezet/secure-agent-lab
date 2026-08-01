@@ -11,7 +11,7 @@ SNIPPETS=(examples/claude-code/cred-gateway/*.conf examples/dev-container/.devco
 COMPOSES=(stack/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 
 BANK_SCHEMA="bank/schema/provider.schema.json"
-HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+require_jq   # manifests are JSON and are read, not pattern-matched
 
 # Routes that must never appear in a cred-gateway snippet: everything the bank
 # declares "exposed": false, plus routes retired from earlier releases that no
@@ -19,22 +19,15 @@ HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 #
 # Derived rather than hardcoded — a new provider with a /stripe/key route is
 # covered the moment its manifest lands, which is the maintenance trap #32
-# exists to remove. The literal list survives only as the jq-less fallback, so
-# a host without jq gets the pre-bank coverage rather than none.
+# exists to remove.
 DENY_LEGACY="/anthropic/key"
-if [ "$HAVE_JQ" = 1 ] && [ -f "$BANK_SCHEMA" ]; then
-  DENY_PATHS=$(
-    { for m in bank/*/provider.json; do
-        [ -f "$m" ] && jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m"
-      done
-      printf '%s\n' $DENY_LEGACY
-    } | sort -u
-  )
-  DENY_SRC="derived from bank manifests"
-else
-  DENY_PATHS="/github/token /anthropic/key /anthropic/cred /cloudflare/token"
-  DENY_SRC="hardcoded fallback (jq unavailable)"
-fi
+DENY_PATHS=$(
+  { for m in bank/*/provider.json; do
+      [ -f "$m" ] && jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m"
+    done
+    printf '%s\n' $DENY_LEGACY
+  } | sort -u
+)
 
 suite "cred-gateway snippets use exact-match locations"
 # A prefix match like `location /github/` exposes every broker route under it,
@@ -45,7 +38,7 @@ for f in "${SNIPPETS[@]}"; do
   else ko "$f — non-exact location" "$bad"; fi
 done
 
-suite "snippets do not expose raw-credential endpoints ($DENY_SRC)"
+suite "snippets do not expose raw-credential endpoints"
 # These hand the lab container a usable secret rather than spending it on
 # lab's behalf. They belong in a proxy addon, never in the gateway.
 for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
@@ -394,15 +387,13 @@ for i in "${!EXAMPLE_COMPOSES[@]}"; do
   # else — which is the whole reason min_stack is a manifest field rather than
   # a note in the changelog.
   required="$AUDIT_MIN"
-  if [ "$HAVE_JQ" = 1 ]; then
-    for bf in "$dir"/broker/*.js "$dir"/proxy/*.py; do
-      [ -f "$bf" ] || continue
-      bb=$(basename "$bf"); bs=${bb#[0-9][0-9][0-9]_}; bn=${bs%.*}
-      bm="bank/$bn/provider.json"
-      [ -f "$bm" ] || continue
-      required=$(printf '%s\n%s\n' "$required" "$(jq -r .min_stack "$bm")" | sort -V | tail -1)
-    done
-  fi
+  for bf in "$dir"/broker/*.js "$dir"/proxy/*.py; do
+    [ -f "$bf" ] || continue
+    bb=$(basename "$bf"); bs=${bb#[0-9][0-9][0-9]_}; bn=${bs%.*}
+    bm="bank/$bn/provider.json"
+    [ -f "$bm" ] || continue
+    required=$(printf '%s\n%s\n' "$required" "$(jq -r .min_stack "$bm")" | sort -V | tail -1)
+  done
 
   higher=$(printf '%s\n%s\n' "$required" "$tag" | sort -V | tail -1)
   if [ "$higher" = "$tag" ]; then
@@ -442,9 +433,7 @@ done
 suite "bank manifests are well-formed"
 BANK_SCHEMA="bank/schema/provider.schema.json"
 bank_entries=(bank/*/)
-if ! command -v jq >/dev/null 2>&1; then
-  skip "bank manifest checks" "jq not installed"
-elif [ ! -f "$BANK_SCHEMA" ]; then
+if [ ! -f "$BANK_SCHEMA" ]; then
   ko "bank schema present" "$BANK_SCHEMA missing"
 elif ! jq -e . "$BANK_SCHEMA" >/dev/null 2>&1; then
   ko "bank schema is valid JSON" "$BANK_SCHEMA does not parse"
@@ -515,9 +504,11 @@ fi
 # Suite B — addons match their declared hosts, in both directions.
 #
 # Generalizes "github addon does not match github.com" to every provider. That
-# suite is kept rather than deleted: it needs no jq, and it guards the single
-# most-cited invariant in the repo, so it stays as the floor when this one
-# cannot run.
+# suite is kept rather than deleted, now as defence in depth rather than as a
+# fallback: it asserts the invariant directly against the file, where this one
+# reaches the examples only transitively (bank is clean AND suite D says the
+# examples match it). One grep is cheap insurance on the one invariant this
+# project has actually shipped a violation of.
 #
 # Both directions matter. An addon matching a host the manifest omits is an
 # addon injecting somewhere the allowlist seed never authorized; a manifest
@@ -526,34 +517,30 @@ fi
 # pretty_host suite — every addon names hostnames in its own prose.
 # ---------------------------------------------------------------------------
 suite "bank addons match their declared hosts"
-if [ "$HAVE_JQ" != 1 ]; then
-  skip "bank host agreement" "jq not installed"
-else
-  for m in bank/*/provider.json; do
-    [ -f "$m" ] || continue
-    nm=$(jq -r .name "$m"); addon="bank/$nm/proxy/$nm.py"
-    [ -f "$addon" ] || continue
-    declared=$(jq -r '.hosts[]' "$m" | sort -u)
-    actual=$(awk '
-      { line = $0; sub(/#.*$/, "", line) }
-      { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
-      { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
-      ds  { if (q % 2 == 1) ds = 0; next }
-      q % 2 == 1 { ds = 1; next }
-      { print line }
-    ' "$addon" \
-      | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
-      | tr -d '"'\''' | sort -u)
-    missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
-    extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
-    if [ -z "$missing" ] && [ -z "$extra" ]; then
-      ok "$addon — hosts agree with $m ($(echo $declared))"
-    else
-      ko "$addon — hosts disagree with $m" \
-         "declared but not matched: ${missing:-none} | matched but not declared: ${extra:-none}"
-    fi
-  done
-fi
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  nm=$(jq -r .name "$m"); addon="bank/$nm/proxy/$nm.py"
+  [ -f "$addon" ] || continue
+  declared=$(jq -r '.hosts[]' "$m" | sort -u)
+  actual=$(awk '
+    { line = $0; sub(/#.*$/, "", line) }
+    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
+    { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
+    ds  { if (q % 2 == 1) ds = 0; next }
+    q % 2 == 1 { ds = 1; next }
+    { print line }
+  ' "$addon" \
+    | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
+    | tr -d '"'\''' | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+  extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+  if [ -z "$missing" ] && [ -z "$extra" ]; then
+    ok "$addon — hosts agree with $m ($(echo $declared))"
+  else
+    ko "$addon — hosts disagree with $m" \
+     "declared but not matched: ${missing:-none} | matched but not declared: ${extra:-none}"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # Suite C — gateway snippets expose only declared-exposed routes.
@@ -565,35 +552,31 @@ fi
 # route the manifest declared.
 # ---------------------------------------------------------------------------
 suite "bank gateway snippets expose exactly their declared-exposed routes"
-if [ "$HAVE_JQ" != 1 ]; then
-  skip "bank route exposure" "jq not installed"
-else
-  for m in bank/*/provider.json; do
-    [ -f "$m" ] || continue
-    nm=$(jq -r .name "$m"); conf="bank/$nm/cred-gateway/$nm.conf"
-    exposed=$(jq -r '.broker_routes[] | select(.exposed) | .path' "$m" | sort -u)
-    if [ -z "$exposed" ]; then
-      if [ -f "$conf" ]; then
-        ko "$nm — has a .conf but declares no exposed route" "$conf should not exist"
-      else
-        ok "$nm — declares no exposed route and ships no .conf"
-      fi
-      continue
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  nm=$(jq -r .name "$m"); conf="bank/$nm/cred-gateway/$nm.conf"
+  exposed=$(jq -r '.broker_routes[] | select(.exposed) | .path' "$m" | sort -u)
+  if [ -z "$exposed" ]; then
+    if [ -f "$conf" ]; then
+      ko "$nm — has a .conf but declares no exposed route" "$conf should not exist"
+    else
+      ok "$nm — declares no exposed route and ships no .conf"
     fi
-    if [ ! -f "$conf" ]; then
-      ko "$nm — declares exposed routes but ships no .conf" "expected $conf"
-      continue
-    fi
-    present=$(grep -oE '^[[:space:]]*location[[:space:]]*=[[:space:]]*[^ {]+' "$conf" \
-              | sed -E 's/.*=[[:space:]]*//' | sort -u)
-    missing=$(comm -23 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
-    extra=$(comm -13 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
-    [ -z "$missing" ] && ok "$conf — every declared-exposed route has a location" \
-                      || ko "$conf — declared exposed but absent" "$missing"
-    [ -z "$extra" ]   && ok "$conf — every location is a declared route" \
-                      || ko "$conf — exposes an undeclared route" "$extra"
-  done
-fi
+    continue
+  fi
+  if [ ! -f "$conf" ]; then
+    ko "$nm — declares exposed routes but ships no .conf" "expected $conf"
+    continue
+  fi
+  present=$(grep -oE '^[[:space:]]*location[[:space:]]*=[[:space:]]*[^ {]+' "$conf" \
+            | sed -E 's/.*=[[:space:]]*//' | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+  extra=$(comm -13 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+  [ -z "$missing" ] && ok "$conf — every declared-exposed route has a location" \
+                    || ko "$conf — declared exposed but absent" "$missing"
+  [ -z "$extra" ]   && ok "$conf — every location is a declared route" \
+                  || ko "$conf — exposes an undeclared route" "$extra"
+done
 
 # ---------------------------------------------------------------------------
 # Suite D — examples match the bank byte for byte.

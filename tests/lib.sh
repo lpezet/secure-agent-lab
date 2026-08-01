@@ -113,6 +113,15 @@ finish() {
 # Stock images the suite pulls. Kept small and boring on purpose.
 IMAGES=(nginx:alpine curlimages/curl:latest alpine:latest)
 
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '%sjq is not installed — cannot run this suite%s\n' "$_R" "$_N" >&2
+    printf 'The bank manifests are JSON and are read, not pattern-matched.\n' >&2
+    printf '  Debian/Ubuntu: sudo apt install jq   ·   macOS: brew install jq\n' >&2
+    exit 2
+  fi
+}
+
 require_docker() {
   if ! docker version >/dev/null 2>&1; then
     printf '%sdocker is not available — cannot run this suite%s\n' "$_R" "$_N" >&2
