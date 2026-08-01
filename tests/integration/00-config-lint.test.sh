@@ -124,7 +124,8 @@ suite "audit events reference an exception only via .code or .name"
 # references, and flag any mention of the exception variable that survives.
 for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
          examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
-         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/broker/*.js bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
   bad=$(awk '
     # Comments are prose (these files explain the anti-pattern in their own).
@@ -158,7 +159,8 @@ suite "github addon does not match github.com"
 # Documented invariant: git push/pull authenticates through the credential
 # helper. Matching github.com here collides with git's Basic auth handshake
 # inside the MITMed tunnel.
-for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_github.py; do
+for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_github.py \
+         bank/github/proxy/github.py; do
   [ -f "$f" ] || continue
   bad=$(grep -nE '"github\.com"|'\''github\.com'\''' "$f" || true)
   if [ -z "$bad" ]; then ok "$f — matches api./uploads. hosts only"
@@ -182,7 +184,8 @@ suite "only the policy addon references pretty_host in code"
 #
 # Comments and docstrings are stripped first — every shipped addon explains
 # this anti-pattern in its own prose, which is the point.
-for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
   [ "$(basename "$f")" = "000_policy.py" ] && continue
   bad=$(awk '
@@ -209,7 +212,8 @@ suite "addons log a parsed endpoint, never a raw request path"
 # adds a provider, so the shipped pattern has to be the safe one.
 # Backticked mentions are prose (the addons explain the anti-pattern in their
 # own docstrings), so only real keyword arguments count.
-for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
   bad=$(grep -n 'path=flow\.request\.path' "$f" | grep -v '`' || true)
   if [ -z "$bad" ]; then ok "$(basename "$f") — no raw path in an audit event"
