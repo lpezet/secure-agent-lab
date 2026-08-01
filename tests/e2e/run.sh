@@ -81,10 +81,10 @@ teardown() {
 trap teardown EXIT INT TERM
 
 printf '%s── building ──%s\n' "$B" "$N"
-# stack/dev is the real base image; tests/e2e/dev extends it with gh. Building
+# stack/lab is the real base image; tests/e2e/lab extends it with gh. Building
 # it here keeps that a reference rather than a copy.
-docker build -q -t sat-e2e-devbase "$REPO_ROOT/stack/dev" >/dev/null || {
-  printf '%sfailed to build the dev base image%s\n' "$R" "$N" >&2; exit 2; }
+docker build -q -t sat-e2e-devbase "$REPO_ROOT/stack/lab" >/dev/null || {
+  printf '%sfailed to build the lab base image%s\n' "$R" "$N" >&2; exit 2; }
 "${COMPOSE[@]}" build >/dev/null || {
   printf '%scompose build failed%s\n' "$R" "$N" >&2; exit 2; }
 
@@ -99,8 +99,8 @@ fi
 # The devcontainer lifecycle scripts do not run here, so do their two essential
 # steps by hand: trust the mitmproxy CA and wire the git credential helper.
 # Everything downstream (HTTPS through the proxy, git push) depends on these.
-printf '%s── preparing dev container ──%s\n' "$B" "$N"
-"${COMPOSE[@]}" exec -T dev bash -euo pipefail -c '
+printf '%s── preparing lab container ──%s\n' "$B" "$N"
+"${COMPOSE[@]}" exec -T lab bash -euo pipefail -c '
   cp /proxy-certs/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy.crt
   update-ca-certificates >/dev/null 2>&1
   git config --global credential.helper "!f() { curl -s \"\$GIT_CREDENTIAL_URL\"; }; f"

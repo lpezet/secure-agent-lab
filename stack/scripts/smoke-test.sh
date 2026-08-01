@@ -1,6 +1,6 @@
 #!/bin/bash
 # Smoke test for the credential broker + proxy setup.
-# Run inside the dev container.
+# Run inside the lab container.
 
 set -euo pipefail
 
@@ -12,12 +12,12 @@ section() {
 }
 
 # ---------- Network isolation (security boundary) ----------
-section "1. Broker is NOT directly reachable from dev"
+section "1. Broker is NOT directly reachable from lab"
 if curl -s --max-time 2 http://broker:8080/healthz > /dev/null 2>&1; then
   echo "FAIL: broker reachable — security boundary broken"
   exit 1
 else
-  echo "PASS: broker unreachable from dev container"
+  echo "PASS: broker unreachable from lab container"
 fi
 
 section "1b. Broker is NOT reachable via proxy tunnel (policy.py)"

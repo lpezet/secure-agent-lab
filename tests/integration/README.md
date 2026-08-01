@@ -1,6 +1,6 @@
 # Integration tier
 
-Guards the security boundaries this repo exists to enforce: the dev container
+Guards the security boundaries this repo exists to enforce: the lab container
 must never obtain a raw credential, and the proxy must never spend one on a
 destination the operator did not intend.
 

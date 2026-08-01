@@ -1,7 +1,7 @@
-# The client side of the e2e stack: a dev container with the tools the tests
+# The client side of the e2e stack: a lab container with the tools the tests
 # drive (git, gh, curl, jq) and nothing else.
 #
-# FROM the image run.sh builds out of stack/dev, so this stays the real base
+# FROM the image run.sh builds out of stack/lab, so this stays the real base
 # image rather than a copy of it that can drift. run.sh must build that tag
 # before `compose build` — see _build_devbase there.
 ARG DEVBASE=sat-e2e-devbase

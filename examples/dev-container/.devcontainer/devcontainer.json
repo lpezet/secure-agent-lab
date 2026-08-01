@@ -1,11 +1,11 @@
 {
-  "name": "agent-dev",
+  "name": "agent-lab",
   "dockerComposeFile": "compose.yaml",
-  "service": "dev",
+  "service": "lab",
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
-  "postCreateCommand": "/workspace/.devcontainer/dev/setup.sh",
-  "postStartCommand": "/workspace/.devcontainer/dev/setup-start.sh",
+  "postCreateCommand": "/workspace/.devcontainer/lab/setup.sh",
+  "postStartCommand": "/workspace/.devcontainer/lab/setup-start.sh",
   "remoteUser": "node",
   "forwardPorts": [9000],
   "portsAttributes": {

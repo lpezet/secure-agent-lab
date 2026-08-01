@@ -1,14 +1,14 @@
 """Block forwarding of requests to internal service hostnames.
 
-The proxy sits on both the `secure` and `dev` networks, so it can reach
-the broker. Without this addon, code inside the dev container could issue
+The proxy sits on both the `secure` and `lab` networks, so it can reach
+the broker. Without this addon, code inside the lab container could issue
 plain HTTP proxy requests (e.g. curl --proxy http://proxy:8080 http://broker:8080/...)
 and the proxy would happily forward them. This addon intercepts and rejects
 any such request before it is forwarded.
 
 Note: this matches by hostname, not IP. Docker network isolation is the
-primary control that prevents dev from routing to broker's IP directly —
-broker is on `secure` only, which dev has no membership in. This addon is
+primary control that prevents lab from routing to broker's IP directly —
+broker is on `secure` only, which lab has no membership in. This addon is
 a defence-in-depth layer, not the sole barrier.
 TODO: consider flipping to default-deny (allowlist of known-good external
 hosts) as a hardening pass once the set of required destinations is known.
@@ -24,7 +24,7 @@ def _destination(flow: http.HTTPFlow) -> str:
     """Host this request will actually be sent to.
 
     NEVER use flow.request.pretty_host for a security decision. It prefers the
-    client-supplied Host header, which the dev container fully controls, while
+    client-supplied Host header, which the lab container fully controls, while
     mitmproxy connects to flow.request.host (from the absolute-form URI, the
     CONNECT authority, or the TLS SNI). Matching on pretty_host let
 

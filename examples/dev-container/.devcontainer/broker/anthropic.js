@@ -17,7 +17,7 @@ function tryReadFile(path) {
 
 module.exports = {
   // Reachable only from the proxy on the `secure` network.
-  // cred-gateway does not whitelist this path, so dev cannot reach it.
+  // cred-gateway does not whitelist this path, so lab cannot reach it.
   // Returns whichever credential file exists, preferring auth token over API key.
   // type: "auth_token" → inject as Authorization: Bearer <value>
   // type: "api_key"    → inject as x-api-key: <value>

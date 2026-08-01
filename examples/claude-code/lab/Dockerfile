@@ -31,10 +31,10 @@ ENV PATH="/home/agent/.local/bin:/home/agent/.bun/bin:${PATH}"
 # Claude Code is installed last so busting this layer doesn't redo apt/node/bun.
 # Accepts "latest" (default), "stable", or an exact version like "2.1.5".
 # Change the value to force a re-download — Docker caches this RUN otherwise:
-#   docker compose build --build-arg CLAUDE_VERSION=stable dev
-#   docker compose up -d --force-recreate dev
-# To re-build dev from scratch:
-#   docker compose build --no-cache dev
+#   docker compose build --build-arg CLAUDE_VERSION=stable lab
+#   docker compose up -d --force-recreate lab
+# To re-build lab from scratch:
+#   docker compose build --no-cache lab
 ARG CLAUDE_VERSION=latest
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
 
