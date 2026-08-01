@@ -1,0 +1,27 @@
+{
+  "name": "anthropic",
+  "summary": "Anthropic credential for api.anthropic.com; prefers OAuth token over API key, Admin API blocked",
+  "min_stack": "1.1.0",
+  "load_band": "provider",
+  "hosts": ["api.anthropic.com"],
+  "secrets": [
+    {
+      "env": "ANTHROPIC_AUTH_TOKEN_PATH",
+      "file": "anthropic-auth.token",
+      "prompt": "Anthropic OAuth token (preferred; leave blank to use an API key)",
+      "optional": true
+    },
+    {
+      "env": "ANTHROPIC_API_KEY_PATH",
+      "file": "anthropic.key",
+      "prompt": "Anthropic API key (used only if no OAuth token is set)",
+      "optional": true
+    }
+  ],
+  "broker_routes": [
+    { "path": "/anthropic/cred", "exposed": false }
+  ],
+  "lab_env": {
+    "ANTHROPIC_API_KEY": "proxy-injected"
+  }
+}
