@@ -10,6 +10,32 @@ cd "$REPO_ROOT"
 SNIPPETS=(examples/claude-code/cred-gateway/*.conf examples/dev-container/.devcontainer/cred-gateway/*.conf)
 COMPOSES=(stack/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 
+BANK_SCHEMA="bank/schema/provider.schema.json"
+HAVE_JQ=0; command -v jq >/dev/null 2>&1 && HAVE_JQ=1
+
+# Routes that must never appear in a cred-gateway snippet: everything the bank
+# declares "exposed": false, plus routes retired from earlier releases that no
+# manifest mentions any more but a stale deployment might still carry.
+#
+# Derived rather than hardcoded — a new provider with a /stripe/key route is
+# covered the moment its manifest lands, which is the maintenance trap #32
+# exists to remove. The literal list survives only as the jq-less fallback, so
+# a host without jq gets the pre-bank coverage rather than none.
+DENY_LEGACY="/anthropic/key"
+if [ "$HAVE_JQ" = 1 ] && [ -f "$BANK_SCHEMA" ]; then
+  DENY_PATHS=$(
+    { for m in bank/*/provider.json; do
+        [ -f "$m" ] && jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m"
+      done
+      printf '%s\n' $DENY_LEGACY
+    } | sort -u
+  )
+  DENY_SRC="derived from bank manifests"
+else
+  DENY_PATHS="/github/token /anthropic/key /anthropic/cred /cloudflare/token"
+  DENY_SRC="hardcoded fallback (jq unavailable)"
+fi
+
 suite "cred-gateway snippets use exact-match locations"
 # A prefix match like `location /github/` exposes every broker route under it,
 # including /github/token. tests/integration/10 proves that leak is real.
@@ -19,11 +45,12 @@ for f in "${SNIPPETS[@]}"; do
   else ko "$f — non-exact location" "$bad"; fi
 done
 
-suite "snippets do not expose raw-credential endpoints"
+suite "snippets do not expose raw-credential endpoints ($DENY_SRC)"
 # These hand the lab container a usable secret rather than spending it on
 # lab's behalf. They belong in a proxy addon, never in the gateway.
-for f in "${SNIPPETS[@]}"; do
-  for path in /github/token /anthropic/key /anthropic/cred /cloudflare/token; do
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+  [ -f "$f" ] || continue
+  for path in $DENY_PATHS; do
     if grep -q "location[[:space:]]*=[[:space:]]*$path\b" "$f"; then
       ko "$f — exposes $path" "raw credential reachable from lab"
     else
@@ -349,6 +376,9 @@ suite "examples only depend on the stack audit helpers when their pin can back i
 # silently missing the audit trail. Derived from each example's own pin
 # rather than hardcoded per example, so this keeps working unattended as
 # examples upgrade one at a time instead of needing a manual edit here.
+# The floor: the stack release that introduced audit.js/audit.py. Used when jq
+# is unavailable, and as the starting point each example's requirement is
+# raised from.
 AUDIT_MIN="1.1.0"
 EXAMPLE_COMPOSES=(examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 EXAMPLE_DIRS=(examples/claude-code examples/dev-container/.devcontainer)
@@ -358,24 +388,40 @@ for i in "${!EXAMPLE_COMPOSES[@]}"; do
   tag=$(grep -oE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
   if [ -z "$tag" ]; then skip "$dir — no pinned tag found" ""; continue; fi
 
-  higher=$(printf '%s\n%s\n' "$AUDIT_MIN" "$tag" | sort -V | tail -1)
+  # Suite E: the requirement is the highest min_stack among the bank entries
+  # this example actually vendors, not one constant for every example. An entry
+  # that needs 1.5.0 raises the bar for the examples carrying it and for nobody
+  # else — which is the whole reason min_stack is a manifest field rather than
+  # a note in the changelog.
+  required="$AUDIT_MIN"
+  if [ "$HAVE_JQ" = 1 ]; then
+    for bf in "$dir"/broker/*.js "$dir"/proxy/*.py; do
+      [ -f "$bf" ] || continue
+      bb=$(basename "$bf"); bs=${bb#[0-9][0-9][0-9]_}; bn=${bs%.*}
+      bm="bank/$bn/provider.json"
+      [ -f "$bm" ] || continue
+      required=$(printf '%s\n%s\n' "$required" "$(jq -r .min_stack "$bm")" | sort -V | tail -1)
+    done
+  fi
+
+  higher=$(printf '%s\n%s\n' "$required" "$tag" | sort -V | tail -1)
   if [ "$higher" = "$tag" ]; then
     for f in "$dir"/broker/*.js; do
       [ -f "$f" ] || continue
-      check_contains "$f (pinned v$tag) uses the audit helper" "$(cat "$f")" 'require("../audit")'
+      check_contains "$f (pinned v$tag, needs v$required) uses the audit helper" "$(cat "$f")" 'require("../audit")'
     done
     for f in "$dir"/proxy/*.py; do
       [ -f "$f" ] || continue
-      check_contains "$f (pinned v$tag) uses the audit helper" "$(cat "$f")" "import audit"
+      check_contains "$f (pinned v$tag, needs v$required) uses the audit helper" "$(cat "$f")" "import audit"
     done
   else
     for f in "$dir"/broker/*.js; do
       [ -f "$f" ] || continue
-      check_not_contains "$f (pinned v$tag, predates audit.js) does not require it" "$(cat "$f")" 'require("../audit")'
+      check_not_contains "$f (pinned v$tag, below the v$required its entries need) does not require audit.js" "$(cat "$f")" 'require("../audit")'
     done
     for f in "$dir"/proxy/*.py; do
       [ -f "$f" ] || continue
-      check_not_contains "$f (pinned v$tag, predates audit.py) does not import it" "$(cat "$f")" "import audit"
+      check_not_contains "$f (pinned v$tag, below the v$required its entries need) does not import audit.py" "$(cat "$f")" "import audit"
     done
   fi
 done
@@ -462,7 +508,126 @@ else
       else ko "$entry/$rel is not implied by the manifest" "stray file in a bank entry"; fi
     done < <(find "$entry" -type f | sort)
   done
-  [ "$found_entry" = 0 ] && skip "bank entries" "none present yet — step 2 of #32"
+  [ "$found_entry" = 0 ] && skip "bank entries" "none present"
 fi
+
+# ---------------------------------------------------------------------------
+# Suite B — addons match their declared hosts, in both directions.
+#
+# Generalizes "github addon does not match github.com" to every provider. That
+# suite is kept rather than deleted: it needs no jq, and it guards the single
+# most-cited invariant in the repo, so it stays as the floor when this one
+# cannot run.
+#
+# Both directions matter. An addon matching a host the manifest omits is an
+# addon injecting somewhere the allowlist seed never authorized; a manifest
+# listing a host the addon ignores seeds egress for a destination nothing
+# validates. Comments and docstrings are stripped with the same awk as the
+# pretty_host suite — every addon names hostnames in its own prose.
+# ---------------------------------------------------------------------------
+suite "bank addons match their declared hosts"
+if [ "$HAVE_JQ" != 1 ]; then
+  skip "bank host agreement" "jq not installed"
+else
+  for m in bank/*/provider.json; do
+    [ -f "$m" ] || continue
+    nm=$(jq -r .name "$m"); addon="bank/$nm/proxy/$nm.py"
+    [ -f "$addon" ] || continue
+    declared=$(jq -r '.hosts[]' "$m" | sort -u)
+    actual=$(awk '
+      { line = $0; sub(/#.*$/, "", line) }
+      { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
+      { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
+      ds  { if (q % 2 == 1) ds = 0; next }
+      q % 2 == 1 { ds = 1; next }
+      { print line }
+    ' "$addon" \
+      | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
+      | tr -d '"'\''' | sort -u)
+    missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+    extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+    if [ -z "$missing" ] && [ -z "$extra" ]; then
+      ok "$addon — hosts agree with $m ($(echo $declared))"
+    else
+      ko "$addon — hosts disagree with $m" \
+         "declared but not matched: ${missing:-none} | matched but not declared: ${extra:-none}"
+    fi
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Suite C — gateway snippets expose only declared-exposed routes.
+#
+# Clause 2 of #32 §3 ("unexposed routes appear in no .conf, in any entry") is
+# enforced by the deny-paths suite at the top, which now derives its list from
+# these manifests and globs bank/*/cred-gateway too. This covers the other two:
+# every exposed route is actually exposed, and every exposed location is a
+# route the manifest declared.
+# ---------------------------------------------------------------------------
+suite "bank gateway snippets expose exactly their declared-exposed routes"
+if [ "$HAVE_JQ" != 1 ]; then
+  skip "bank route exposure" "jq not installed"
+else
+  for m in bank/*/provider.json; do
+    [ -f "$m" ] || continue
+    nm=$(jq -r .name "$m"); conf="bank/$nm/cred-gateway/$nm.conf"
+    exposed=$(jq -r '.broker_routes[] | select(.exposed) | .path' "$m" | sort -u)
+    if [ -z "$exposed" ]; then
+      if [ -f "$conf" ]; then
+        ko "$nm — has a .conf but declares no exposed route" "$conf should not exist"
+      else
+        ok "$nm — declares no exposed route and ships no .conf"
+      fi
+      continue
+    fi
+    if [ ! -f "$conf" ]; then
+      ko "$nm — declares exposed routes but ships no .conf" "expected $conf"
+      continue
+    fi
+    present=$(grep -oE '^[[:space:]]*location[[:space:]]*=[[:space:]]*[^ {]+' "$conf" \
+              | sed -E 's/.*=[[:space:]]*//' | sort -u)
+    missing=$(comm -23 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+    extra=$(comm -13 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+    [ -z "$missing" ] && ok "$conf — every declared-exposed route has a location" \
+                      || ko "$conf — declared exposed but absent" "$missing"
+    [ -z "$extra" ]   && ok "$conf — every location is a declared route" \
+                      || ko "$conf — exposes an undeclared route" "$extra"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Suite D — examples match the bank byte for byte.
+#
+# The examples are what people copy. Once an entry exists, the example's copy
+# is either identical to it or it is an unreviewed fork wearing a vetted name.
+# Only one documented normalization: the NNN_ prefix, which is deployment state
+# by design (see #32 §4), so it cannot be in the bank.
+# ---------------------------------------------------------------------------
+suite "examples match the bank byte for byte"
+# These come from stack/proxy/addons/ rather than from a provider bank entry,
+# and check-drift.sh already compares them against it.
+BANK_EXEMPT="000_policy.py 001_allowlist.py"
+for dir in examples/claude-code examples/dev-container/.devcontainer; do
+  for svc in proxy broker cred-gateway; do
+    for f in "$dir/$svc"/*; do
+      [ -f "$f" ] || continue
+      b=$(basename "$f")
+      if printf '%s\n' $BANK_EXEMPT | grep -qx "$b"; then
+        ok "$f — exempt, comes from stack/proxy/addons"
+        continue
+      fi
+      stripped=${b#[0-9][0-9][0-9]_}
+      nm=${stripped%.*}; ext=${stripped##*.}
+      cand="bank/$nm/$svc/$nm.$ext"
+      if [ ! -f "$cand" ]; then
+        ko "$f — no bank counterpart" "expected $cand; add an entry or add $b to BANK_EXEMPT"
+      elif cmp -s "$f" "$cand"; then
+        ok "$f — identical to $cand"
+      else
+        ko "$f — has drifted from $cand" "$(diff "$cand" "$f" | head -6)"
+      fi
+    done
+  done
+done
 
 finish
