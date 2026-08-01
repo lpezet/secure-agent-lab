@@ -126,7 +126,22 @@ cp "$REPO_ROOT"/examples/dev-container/.devcontainer/cred-gateway/*.conf "$d/cre
 cp "$TMPD/clean/compose.yaml" "$d/compose.yaml"
 out=$(run "$d" --example examples/dev-container)
 check_contains "exits 0" "$out" "EXIT=0"
-check_contains "resolves .devcontainer/" "$out" "matches dev-container/proxy/"
+# The .devcontainer/ layout still has to resolve — example_path() dies if it
+# cannot find one — but it is no longer observable through a file comparison.
+# Every provider file in this fixture now resolves through the bank, which
+# wins ahead of the example fallback on purpose (#32 §7). The source line is
+# what proves .devcontainer/ was found.
+check_contains "resolves .devcontainer/" "$out" "examples/dev-container (recorded)"
+check_contains "prefers the bank over the example" "$out" "matches bank/github/proxy/"
+
+suite "the example fallback still catches what the bank does not cover"
+# A file with no bank counterpart and no stack counterpart is the deployment's
+# own. Proves the chain falls through rather than mis-resolving by name.
+cp "$d/proxy/010_github.py" "$d/proxy/040_acme.py"
+out=$(run "$d" --example examples/dev-container)
+check_contains "unmatched file reads as custom" "$out" "040_acme.py"
+check_contains "and is named as owned" "$out" "no upstream counterpart"
+rm -f "$d/proxy/040_acme.py"
 
 suite "refuses a directory that is not a deployment"
 mkdir -p "$TMPD/empty"

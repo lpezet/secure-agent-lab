@@ -1,0 +1,21 @@
+{
+  "name": "cloudflare",
+  "summary": "Scoped Cloudflare API token minted per profile from a long-lived minter token",
+  "min_stack": "1.1.0",
+  "load_band": "provider",
+  "hosts": ["api.cloudflare.com"],
+  "secrets": [
+    {
+      "env": "CLOUDFLARE_MINTER_TOKEN_PATH",
+      "file": "cloudflare-minter.token",
+      "prompt": "Cloudflare minter token (needs permission to create API tokens)",
+      "multiline": false
+    }
+  ],
+  "broker_routes": [
+    { "path": "/cloudflare/token", "exposed": false }
+  ],
+  "lab_env": {
+    "CLOUDFLARE_API_TOKEN": "proxy-injected"
+  }
+}

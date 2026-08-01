@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lpezet/secure-agent-lab/bank/schema/provider.schema.json",
+  "title": "Provider bank entry manifest",
+  "description": "Everything needed to install one credential provider into a running deployment. An entry is data: holding only bank/<name>/ and a running stack must be enough to install it without reading anything else in this repo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "summary", "min_stack", "load_band", "hosts", "broker_routes"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Identity of the entry. Must equal the directory name and every file basename inside it. Uninstall and check-drift resolve by this."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One line, for listings."
+    },
+    "min_stack": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Lowest stack tag whose IMAGE satisfies this entry's imports. Installing into a deployment pinned below it fails at runtime, not at install."
+    },
+    "load_band": {
+      "type": "string",
+      "enum": ["policy", "provider", "post"],
+      "description": "Which numeric band the proxy addon is installed into. policy=000-009, provider=010-899, post=900+. The installer picks the slot; the bank never bakes a number in."
+    },
+    "hosts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Exact hostnames the proxy addon matches. Load-bearing: seeds 001_allowlist.py, and is cross-checked against the quoted hostname literals in the addon."
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Values that live in a file under the secrets dir, 0600, prompted with no echo, never in argv.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["env", "file", "prompt"],
+        "properties": {
+          "env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "file": { "type": "string", "minLength": 1 },
+          "prompt": { "type": "string", "minLength": 1 },
+          "multiline": { "type": "boolean", "description": "A PEM needs a different prompt widget from a token." },
+          "optional": { "type": "boolean" }
+        }
+      }
+    },
+    "config": {
+      "type": "array",
+      "description": "Non-secret values that live in .env, passed by value.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["env", "prompt"],
+        "properties": {
+          "env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "prompt": { "type": "string", "minLength": 1 },
+          "help": { "type": "string" },
+          "default": { "type": "string" }
+        }
+      }
+    },
+    "broker_routes": {
+      "type": "array",
+      "minItems": 1,
+      "description": "EVERY route the broker provider registers, each flagged for whether cred-gateway whitelists it. Listing only the exposed ones would make this documentation; listing all of them makes it a control.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "exposed"],
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "exposed": {
+            "type": "boolean",
+            "description": "true: must appear as an exact-match `location =` in this entry's .conf. false: must appear in NO .conf, in any entry."
+          }
+        }
+      }
+    },
+    "lab_env": {
+      "type": "object",
+      "description": "Environment for the lab service. Values are literals; a real credential here is a lint failure.",
+      "additionalProperties": { "type": "string" },
+      "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" }
+    },
+    "lab_setup": {
+      "type": "string",
+      "description": "Shell fragment run inside the lab container on create. Permitted because it runs on the untrusted side already — it can do nothing the lab could not already do."
+    }
+  }
+}
