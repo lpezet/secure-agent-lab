@@ -13,28 +13,17 @@ COMPOSES=(stack/compose.yaml examples/claude-code/compose.yaml examples/dev-cont
 BANK_SCHEMA="bank/schema/provider.schema.json"
 require_jq   # manifests are JSON and are read, not pattern-matched
 
-# Routes that must never appear in a cred-gateway snippet: everything the bank
-# declares "exposed": false, plus routes retired from earlier releases that no
-# manifest mentions any more but a stale deployment might still carry.
-#
-# Derived rather than hardcoded — a new provider with a /stripe/key route is
-# covered the moment its manifest lands, which is the maintenance trap #32
-# exists to remove.
-DENY_LEGACY="/anthropic/key"
-DENY_PATHS=$(
-  { for m in bank/*/provider.json; do
-      [ -f "$m" ] && jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m"
-    done
-    printf '%s\n' $DENY_LEGACY
-  } | sort -u
-)
+# The checks themselves live in scripts/lib/invariants.sh, shared with
+# scripts/check-invariants.sh so a deployment can run the same ones against its
+# own files (#26). This suite is the "is OUR code safe?" caller.
+. "$REPO_ROOT/scripts/lib/invariants.sh"
 
 suite "cred-gateway snippets use exact-match locations"
 # A prefix match like `location /github/` exposes every broker route under it,
 # including /github/token. tests/integration/10 proves that leak is real.
-for f in "${SNIPPETS[@]}"; do
-  bad=$(grep -nE '^[[:space:]]*location[[:space:]]+[^=]' "$f" || true)
-  if [ -z "$bad" ]; then ok "$f — all locations exact-match"
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+  [ -f "$f" ] || continue
+  if bad=$(inv_location_prefix "$f"); then ok "$f — all locations exact-match"
   else ko "$f — non-exact location" "$bad"; fi
 done
 
@@ -43,13 +32,28 @@ suite "snippets do not expose raw-credential endpoints"
 # lab's behalf. They belong in a proxy addon, never in the gateway.
 for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
   [ -f "$f" ] || continue
-  for path in $DENY_PATHS; do
-    if grep -q "location[[:space:]]*=[[:space:]]*$path\b" "$f"; then
-      ko "$f — exposes $path" "raw credential reachable from lab"
+  if bad=$(inv_raw_cred_endpoint "$f"); then ok "$f — exposes no raw-credential route"
+  else ko "$f — exposes a raw-credential route" "$bad"; fi
+done
+
+suite "the scanner's deny list covers every unexposed bank route"
+# INV_DENY_PATHS is static because scripts/check-invariants.sh runs on a
+# deployment with no checkout and cannot derive it from bank/*/provider.json.
+# This is what stops it lagging: adding a provider whose unexposed route is
+# missing from the library fails here rather than silently narrowing what a
+# deployment gets checked for. Superset, not equality — retired routes stay in
+# the list after no manifest mentions them, which is the point of keeping them.
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  while IFS= read -r route; do
+    [ -n "$route" ] || continue
+    if printf '%s\n' $INV_DENY_PATHS | grep -qx "$route"; then
+      ok "INV_DENY_PATHS covers $route"
     else
-      ok "$f — does not expose $path"
+      ko "INV_DENY_PATHS is missing $route" \
+         "declared \"exposed\": false in $m — add it to scripts/lib/invariants.sh"
     fi
-  done
+  done < <(jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m")
 done
 
 suite "snippets do not redeclare the rate-limit zone"
@@ -102,27 +106,23 @@ suite "lab containers hold no real credentials"
 # CLAUDE.md invariant: these are dummy values that satisfy client-side "am I
 # authenticated?" checks. The proxy strips and replaces them at the wire level.
 for c in "${COMPOSES[@]}"; do
-  for var in GH_TOKEN CLOUDFLARE_API_TOKEN ANTHROPIC_API_KEY; do
-    line=$(grep -E "^[[:space:]]*$var:" "$c" || true)
-    [ -z "$line" ] && continue
-    val=$(printf '%s' "$line" | sed 's/.*: *//' | tr -d '"'"'"' ')
-    if [ "$val" = "proxy-injected" ]; then
-      ok "$c — $var is the dummy placeholder"
-    else
-      ko "$c — $var is not 'proxy-injected'" "found: $val"
-    fi
-  done
+  if bad=$(inv_real_credential "$c"); then ok "$c — placeholder vars are all inert"
+  else ko "$c — a placeholder var holds something else" "$bad"; fi
 done
 
 suite "no credential material committed"
 # Length-bounded so `.env.example` placeholders (sk-ant-..., ghp_xxx) do not
 # trip the check while a real key still would.
-for pat in 'sk-ant-[A-Za-z0-9_-]{20,}' 'ghp_[A-Za-z0-9]{20,}' 'github_pat_[A-Za-z0-9_]{20,}' \
-           'BEGIN RSA PRIVATE KEY' 'BEGIN PRIVATE KEY' 'BEGIN OPENSSH PRIVATE KEY'; do
-  hits=$(git grep -lE "$pat" -- . ':!tests/integration/00-config-lint.test.sh' 2>/dev/null || true)
+# Patterns come from the library; the traversal does not. git grep covers the
+# whole repo and respects .gitignore, which is the right sweep here and is not
+# something a scanner pointed at one deployment directory can do.
+while IFS= read -r pat; do
+  hits=$(git grep -lE "$pat" -- . ':!tests/integration/00-config-lint.test.sh' ':!scripts/lib/invariants.sh' 2>/dev/null || true)
   if [ -z "$hits" ]; then ok "no match for /$pat/"
   else ko "credential-shaped string committed: /$pat/" "$hits"; fi
-done
+done <<EOF
+$INV_CRED_PATTERNS
+EOF
 
 suite "audit events reference an exception only via .code or .name"
 # Not the security control. The audit trail is written entirely by whatever
@@ -147,32 +147,8 @@ for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
          examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
          bank/*/broker/*.js bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
-  bad=$(awk '
-    # Comments are prose (these files explain the anti-pattern in their own).
-    { line = $0; sub(/[[:space:]]*(\/\/|#).*$/, "", line) }
-    !inside && line ~ /log_?[Ee]vent\(/ { inside = 1; start = NR; buf = ""; depth = 0 }
-    inside {
-      buf = buf " " line
-      n = gsub(/\(/, "(", line); depth += n
-      n = gsub(/\)/, ")", line); depth -= n
-      if (depth > 0) next
-      inside = 0
-      t = buf
-      # Quoted literals are values, not references — "Error" is fine. Only
-      # brace-free ones though: an f-string is a reference wearing a literal
-      # and f"{e}" leaks exactly like str(e). Backticks are never stripped, so
-      # a template literal interpolating ${err} stays visible too.
-      gsub(/"[^"{}]*"/, "", t); gsub(/'"'"'[^'"'"'{}]*'"'"'/, "", t)
-      # Field names: `error:` in JS, error= in Python. A key is not a reference.
-      gsub(/(err|error|e|ex|exc)[[:space:]]*[:=]/, "", t)
-      # The two permitted references.
-      gsub(/(err|error|e|ex|exc)\.(code|name)/, "", t)
-      # Anything left that names the exception is the violation, whatever the
-      # syntax around it.
-      if (t ~ /(^|[^[:alnum:]_.])(err|error|e|ex|exc)([^[:alnum:]_]|$)/) print start ": " buf
-    }' "$f")
-  if [ -z "$bad" ]; then ok "$(basename "$f") — exception referenced safely or not at all"
-  else ko "$f — audit event can carry exception text" "$bad"; fi
+  if bad=$(inv_exception_quoted "$f"); then ok "$(basename "$f") — exception referenced safely or not at all"
+  else ko "$f — audit event quotes an exception" "$bad"; fi
 done
 
 suite "github addon does not match github.com"
@@ -182,8 +158,7 @@ suite "github addon does not match github.com"
 for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_github.py \
          bank/github/proxy/github.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -nE '"github\.com"|'\''github\.com'\''' "$f" || true)
-  if [ -z "$bad" ]; then ok "$f — matches api./uploads. hosts only"
+  if bad=$(inv_github_com_matched "$f"); then ok "$f — matches api./uploads. hosts only"
   else ko "$f — matches github.com" "$bad"; fi
 done
 
@@ -208,18 +183,7 @@ for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/a
          bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
   [ "$(basename "$f")" = "000_policy.py" ] && continue
-  bad=$(awk '
-    { line = $0; sub(/#.*$/, "", line) }
-    # Same-line docstrings ("""...""") close as fast as they open, so the
-    # block counter below never sees them. Drop them first, or every addon
-    # with a one-line docstring naming the anti-pattern reports itself.
-    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
-    { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
-    ds  { if (q % 2 == 1) ds = 0; next }
-    q % 2 == 1 { ds = 1; next }
-    line ~ /pretty_host/ { print NR ": " $0 }
-  ' "$f")
-  if [ -z "$bad" ]; then ok "$(basename "$f") — decides on flow.request.host"
+  if bad=$(inv_pretty_host "$f"); then ok "$(basename "$f") — decides on flow.request.host"
   else ko "$f — references pretty_host outside a comment" "$bad"; fi
 done
 
@@ -235,8 +199,7 @@ suite "addons log a parsed endpoint, never a raw request path"
 for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
          bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -n 'path=flow\.request\.path' "$f" | grep -v '`' || true)
-  if [ -z "$bad" ]; then ok "$(basename "$f") — no raw path in an audit event"
+  if bad=$(inv_raw_path_logged "$f"); then ok "$(basename "$f") — no raw path in an audit event"
   else ko "$f — logs a raw request path" "$bad"; fi
 done
 
@@ -255,8 +218,7 @@ done
 for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
          stack/proxy/addons/*.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -n 'flow\.request\.path\.split("/")' "$f" | grep -v '`' || true)
-  if [ -z "$bad" ]; then ok "$(basename "$f") — no \"/\" split off a raw path"
+  if bad=$(inv_raw_path_split "$f"); then ok "$(basename "$f") — no \"/\" split off a raw path"
   else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
 done
 
@@ -264,8 +226,8 @@ suite "policy addon loads before provider addons"
 # 000_policy.py must run first; entrypoint.sh globs alphabetically.
 for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do
   [ -d "$d" ] || continue
-  first=$(ls "$d"/*.py 2>/dev/null | head -1 | xargs -r basename)
-  check "$d — first addon is 000_policy.py" "000_policy.py" "$first"
+  if bad=$(inv_policy_addon_first "$d"); then ok "$d — first addon is 000_policy.py"
+  else ko "$d — policy addon does not load first" "$bad"; fi
 done
 
 suite "examples build from a release tag, not a branch"
