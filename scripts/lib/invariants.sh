@@ -205,6 +205,23 @@ inv_env_value_credential() {
     | grep -v '_PATH' | grep -v "$_INV_BT")"
 }
 
+# --------------------------------------------------------------- checks: any
+
+# A credential-shaped literal anywhere in a deployment file. The lint sweeps the
+# whole repo with git grep; here the same patterns run per file, so a secret
+# pasted into an addon or a compose file is caught even though nothing tracks it.
+inv_credential_material() {
+  local f="$1" pat out=""
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    out="$out$(grep -nE "$pat" "$f" 2>/dev/null | cut -c1-120)"$'\n'
+  done <<EOF
+$INV_CRED_PATTERNS
+EOF
+  out=$(printf '%s' "$out" | grep -v '^$' || true)
+  _inv_report "$f" "$out"
+}
+
 # ------------------------------------------------------- directory-level check
 
 # 000_policy.py must run before any addon can act on a request; entrypoint.sh
@@ -233,7 +250,8 @@ location_prefix|fail|gateway_conf|prefix-match location exposes every route bene
 raw_cred_endpoint|fail|gateway_conf|exposes a raw-credential broker route to the lab
 real_credential|fail|compose|env var holds something other than the inert placeholder
 env_value_credential|note|broker_js|credential read from an env value rather than a *_PATH file
-observer_port|note|compose|observer port is not bound to loopback'
+observer_port|note|compose|observer port is not bound to loopback
+credential_material|fail|proxy_py broker_js gateway_conf compose|credential-shaped string in a deployment file'
 
 # inv_field <name> <1=severity|2=applies|3=description>
 inv_field() {
