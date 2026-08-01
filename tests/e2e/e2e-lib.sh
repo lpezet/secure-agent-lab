@@ -21,24 +21,24 @@ SECRET_PATTERNS=(
   'v1\.[0-9a-f]{40,}'          # GitHub App installation token
 )
 
-# dev <cmd...> — run a command in the dev container. Non-interactive, stderr
+# lab <cmd...> — run a command in the lab container. Non-interactive, stderr
 # folded in, never fails the calling shell: assertions decide what a failure is.
-dev() { "${COMPOSE[@]}" exec -T dev "$@" 2>&1; }
+lab() { "${COMPOSE[@]}" exec -T lab "$@" 2>&1; }
 
-# dev_sh <script> — same, through bash -c.
-dev_sh() { "${COMPOSE[@]}" exec -T dev bash -c "$1" 2>&1; }
+# lab_sh <script> — same, through bash -c.
+lab_sh() { "${COMPOSE[@]}" exec -T lab bash -c "$1" 2>&1; }
 
-# dev_code <url> [curl-args...] — HTTP status of a request made from dev.
-dev_code() {
+# lab_code <url> [curl-args...] — HTTP status of a request made from lab.
+lab_code() {
   local url="$1"; shift
-  "${COMPOSE[@]}" exec -T dev curl -s -o /dev/null -w '%{http_code}' \
+  "${COMPOSE[@]}" exec -T lab curl -s -o /dev/null -w '%{http_code}' \
     --max-time 30 "$@" "$url" 2>/dev/null
 }
 
-# dev_body <url> [curl-args...] — response body of a request made from dev.
-dev_body() {
+# lab_body <url> [curl-args...] — response body of a request made from lab.
+lab_body() {
   local url="$1"; shift
-  "${COMPOSE[@]}" exec -T dev curl -s --max-time 30 "$@" "$url" 2>/dev/null
+  "${COMPOSE[@]}" exec -T lab curl -s --max-time 30 "$@" "$url" 2>/dev/null
 }
 
 # svc_logs <service> — recent logs, for failure detail.

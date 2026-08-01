@@ -72,7 +72,7 @@ const server = http.createServer(async (req, res) => {
     // its way to a file observer publishes over HTTP. Full detail goes to
     // stdout above, which observer does not read.
     logEvent("request_failed", { route, error: err.code || err.name || "Error" });
-    // Generic for the same reason, and the caller here can be the dev
+    // Generic for the same reason, and the caller here can be the lab
     // container by way of cred-gateway. Nothing is lost: the detail is on
     // stdout and the shape of the failure is already in the trail.
     send(500, { error: "internal error" });

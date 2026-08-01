@@ -117,7 +117,7 @@ def request(flow: http.HTTPFlow) -> None:
     if _exact is None:
         return
     # flow.request.host is the real destination. Do NOT use pretty_host here:
-    # it prefers the client-supplied Host header, so the dev container could
+    # it prefers the client-supplied Host header, so the lab container could
     # point a request at its own server, spoof the header, and have the real
     # credential injected into a request that never goes to the vendor.
     host = flow.request.host.lower()

@@ -23,7 +23,7 @@ if [ "$READY" = true ] && IDENTITY_JSON=$(curl -sf "$GITHUB_IDENTITY_URL" 2>/dev
 else
   echo "[setup-start] WARNING: identity fetch failed — skipping git identity (commits will use default git config)"
   echo "[setup-start]          diagnose: docker compose -f .devcontainer/compose.yaml logs broker"
-  echo "[setup-start]          rerun when fixed: /workspace/.devcontainer/dev/setup-start.sh"
+  echo "[setup-start]          rerun when fixed: /workspace/.devcontainer/lab/setup-start.sh"
 fi
 
 echo "[setup-start] verifying proxy interception (gh through proxy with dummy GH_TOKEN)..."

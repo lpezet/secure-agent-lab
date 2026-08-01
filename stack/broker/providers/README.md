@@ -34,8 +34,8 @@ docker compose -f compose.yaml up -d --force-recreate broker
 
 - **A provider is reachable from the proxy, and from nothing else.** The broker
   sits on the `secure` network only. Adding a route here does not expose it to
-  the dev container — that takes a matching `gateway.d` snippet, which you
-  should add only when a dev-side *tool* must hold the credential locally.
+  the lab container — that takes a matching `gateway.d` snippet, which you
+  should add only when a lab-side *tool* must hold the credential locally.
 - **Export the narrowest useful shape.** `github.js` exposes the raw token and
   the `git credential` form as separate routes precisely so the gateway can
   whitelist the second without the first. If a credential is only ever spent on

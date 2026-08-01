@@ -8,7 +8,7 @@
 #
 # REGRESSION under test: the addons matched flow.request.pretty_host, which
 # prefers the client-supplied Host header while mitmproxy connects to
-# flow.request.host. A dev container could therefore run
+# flow.request.host. A lab container could therefore run
 #
 #   curl --proxy http://proxy:8080 -H 'Host: api.anthropic.com' http://my-server/
 #

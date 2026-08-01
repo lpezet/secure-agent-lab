@@ -51,7 +51,7 @@ services:
     environment:
       BROKER_URL: http://broker:8080
       PYTHONUNBUFFERED: "1"
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test:
         ["CMD-SHELL", "test -f /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem"]
@@ -67,7 +67,7 @@ services:
         condition: service_healthy
     volumes:
       - ../../examples/claude-code/cred-gateway:/etc/nginx/gateway.d:ro
-    networks: [secure, dev]
+    networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
       interval: 5s
@@ -83,11 +83,11 @@ services:
     volumes:
       - ./echo.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      dev:
+      lab:
         aliases: [attacker-host]
 
-  dev:
-    build: ./dev
+  lab:
+    build: ./lab
     depends_on:
       proxy:
         condition: service_healthy
@@ -106,19 +106,19 @@ services:
       SSL_CERT_FILE: /proxy-certs/mitmproxy-ca-cert.pem
       GIT_CREDENTIAL_URL: http://cred-gateway/github/credential
       GITHUB_IDENTITY_URL: http://cred-gateway/github/identity
-      # Dummy values, exactly as a real dev container has them. If a test ever
+      # Dummy values, exactly as a real lab container has them. If a test ever
       # sees a real credential in this container, the boundary has failed.
       ANTHROPIC_API_KEY: proxy-injected
       GH_TOKEN: proxy-injected
       E2E_TEST_REPO: ${E2E_TEST_REPO:-}
     # No devcontainer lifecycle here, so hold the container open ourselves.
     command: sleep infinity
-    networks: [dev]
+    networks: [lab]
 
 networks:
   secure:
     driver: bridge
-  dev:
+  lab:
     driver: bridge
 
 volumes:

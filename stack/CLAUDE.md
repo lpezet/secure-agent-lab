@@ -6,7 +6,7 @@
 docker compose -f compose.yaml up --build
 ```
 
-**Smoke test — run inside the dev container after opening in VSCode:**
+**Smoke test — run inside the lab container after opening in VSCode:**
 ```bash
 ./scripts/smoke-test.sh
 ```
@@ -30,16 +30,16 @@ Open the dashboard from the host — it's loopback-only, not reachable from insi
 ```
 http://localhost:9000
 ```
-Nothing will show up until something writes an audit line. With no providers or gateway.d snippets mounted, broker itself never gets the chance to call `logEvent`, but cred-gateway and the policy addon do, so these two generate visible rows from inside `dev`:
+Nothing will show up until something writes an audit line. With no providers or gateway.d snippets mounted, broker itself never gets the chance to call `logEvent`, but cred-gateway and the policy addon do, so these two generate visible rows from inside `lab`:
 ```bash
 # service: cred-gateway, event: request — access_log fires on every path but /healthz,
 # even a 403 from the default-deny.
-docker compose -f compose.yaml exec dev curl -s http://cred-gateway/anything
+docker compose -f compose.yaml exec lab curl -s http://cred-gateway/anything
 
 # service: proxy, event: blocked — 000_policy.py intercepts a request aimed at broker.
 # --proxy is explicit here: curl only honors lowercase http_proxy for plain HTTP URLs,
 # not the container's HTTP_PROXY env var, so it would silently skip the proxy otherwise.
-docker compose -f compose.yaml exec dev curl -s --proxy http://proxy:8080 http://broker:8080/github/token
+docker compose -f compose.yaml exec lab curl -s --proxy http://proxy:8080 http://broker:8080/github/token
 ```
 If the dashboard header is stuck on "connecting…", check `docker compose -f compose.yaml logs observer` and `docker compose -f compose.yaml ps observer` — the SSE connection should flip to "connected" as soon as `/events`' response headers land, independent of whether the backlog has anything in it yet.
 
@@ -54,7 +54,7 @@ docker compose -f compose.yaml down -v
 docker build -t test-broker broker
 docker build -t test-proxy proxy
 docker build -t test-cred-gateway cred-gateway
-docker build -t test-dev dev
+docker build -t test-lab lab
 ```
 
 **Validate nginx config (config is baked into the image):**
@@ -63,9 +63,9 @@ docker build -t test-cred-gateway cred-gateway
 docker run --rm test-cred-gateway nginx -t
 ```
 
-**Recovery if setup.sh failed mid-run (idempotent, run inside dev container):**
+**Recovery if setup.sh failed mid-run (idempotent, run inside lab container):**
 ```bash
-/workspace/dev/setup.sh
+/workspace/lab/setup.sh
 ```
 
 **Restart a service after rotating a credential:**
@@ -82,7 +82,7 @@ docker compose -f compose.yaml up -d --force-recreate proxy
 **Force-regenerate the mitmproxy CA cert:**
 ```bash
 docker compose -f compose.yaml down
-docker volume rm agent-dev_proxy-certs
+docker volume rm agent-lab_proxy-certs
 docker compose -f compose.yaml up -d
 # Then: Dev Containers: Rebuild Container in VSCode
 ```

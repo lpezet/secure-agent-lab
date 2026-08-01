@@ -9,7 +9,7 @@ A Docker setup to run autonomous agents/harness (e.g. Claude Code) without expos
 ## Architecture
 
 ```
-[dev container]  ──HTTPS──►  [proxy: mitmproxy]  ──injects creds──►  external APIs
+[lab container]  ──HTTPS──►  [proxy: mitmproxy]  ──injects creds──►  external APIs
      │                              │
      │ git creds only               │ fetches creds from broker
      ▼                              ▼
@@ -23,14 +23,14 @@ A Docker setup to run autonomous agents/harness (e.g. Claude Code) without expos
     [log-rotator: cron+logrotate] [observer: :9000, loopback-only]
 ```
 
-broker, proxy, and cred-gateway each write a structured JSONL audit trail (what got injected/blocked/issued, never a credential value) to a shared `audit-logs` named volume. `observer` tails it and serves a live view; `log-rotator` keeps it bounded. Neither has a `networks:` entry — they reach the volume without joining `secure` or `dev`, so the audit trail cannot become a new channel between the two. See the `observer` and `log-rotator` sections below.
+broker, proxy, and cred-gateway each write a structured JSONL audit trail (what got injected/blocked/issued, never a credential value) to a shared `audit-logs` named volume. `observer` tails it and serves a live view; `log-rotator` keeps it bounded. Neither has a `networks:` entry — they reach the volume without joining `secure` or `lab`, so the audit trail cannot become a new channel between the two. See the `observer` and `log-rotator` sections below.
 
 **Two Docker networks enforce the security boundary:**
 
 - `secure`: broker + proxy + cred-gateway. Dev container is **not** on this network.
-- `dev`: dev + proxy + cred-gateway.
+- `lab`: lab + proxy + cred-gateway.
 
-The broker is on `secure` only. Docker DNS will not resolve `broker` from within the dev container, and there is no route even if it did. The only broker-adjacent surface reachable from dev is the two nginx-whitelisted paths on cred-gateway.
+The broker is on `secure` only. Docker DNS will not resolve `broker` from within the lab container, and there is no route even if it did. The only broker-adjacent surface reachable from lab is the two nginx-whitelisted paths on cred-gateway.
 
 **One directory per service, named after the service — in both `stack/` and `examples/`.**
 
@@ -39,7 +39,7 @@ The broker is on `secure` only. Docker DNS will not resolve `broker` from within
 broker         →      broker/providers/*.js          broker/*.js
 proxy          →      proxy/addons/*.py              proxy/*.py
 cred-gateway   →      cred-gateway/gateway.d/*.conf  cred-gateway/*.conf
-dev            →      dev/Dockerfile                 dev/Dockerfile
+lab            →      lab/Dockerfile                 lab/Dockerfile
 ```
 
 `stack/` needs the extra `providers/` / `addons/` / `gateway.d/` level because those directories sit alongside the image's own files — `stack/broker/` also holds `Dockerfile`, `server.js`, `package.json`. An example's service directory holds nothing but the mounted content, so the level would be pure ceremony; the mount says where it lands:
@@ -61,7 +61,7 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 | Path | Who calls it | Notes |
 |---|---|---|
 | `/github/token` | proxy `010_github.py` | Installation token, cached with 5-min safety window |
-| `/github/credential` | cred-gateway → dev git helper | Same token in `git credential` format |
+| `/github/credential` | cred-gateway → lab git helper | Same token in `git credential` format |
 | `/github/identity` | cred-gateway → setup-start.sh | App name+email for `git config`, lifetime-cached |
 | `/anthropic/cred` | proxy `020_anthropic.py` | Returns `{type, value}`; prefers `ANTHROPIC_AUTH_TOKEN_PATH` (OAuth) over `ANTHROPIC_API_KEY_PATH`, read fresh on each uncached call |
 | `/cloudflare/token?profile=` | proxy `030_cloudflare.py` | Mints scoped token via Cloudflare API, cached per profile |
@@ -94,9 +94,9 @@ Both examples vendor `cred-gateway/github.conf`, the counterpart to their `proxy
 - `GET /github/credential` — proxies to `broker:8080/github/credential`
 - `GET /github/identity` — proxies to `broker:8080/github/identity`
 
-Snippets must use exact-match locations (`location = /path`); a prefix match like `location /github/` would expose `/github/token`. The mount source must sit outside whatever is mounted at `/workspace`, or the dev container could widen its own whitelist — `examples/dev-container` mounts `../:/workspace` so it shadows `.devcontainer` with a nested read-only bind to close that.
+Snippets must use exact-match locations (`location = /path`); a prefix match like `location /github/` would expose `/github/token`. The mount source must sit outside whatever is mounted at `/workspace`, or the lab container could widen its own whitelist — `examples/dev-container` mounts `../:/workspace` so it shadows `.devcontainer` with a nested read-only bind to close that.
 
-Everything else returns 403. `/anthropic/cred`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the dev container to exfiltrate raw credentials.
+Everything else returns 403. `/anthropic/cred`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the lab container to exfiltrate raw credentials.
 
 cred-gateway also writes a JSON audit line per request (`log_format audit_json` in `nginx.conf`) to `/var/log/audit/cred-gateway.jsonl`, separate from the existing stdout access log. `/healthz` opts out via `access_log off;` in its location block so healthchecks do not spam the trail. Unlike the broker/proxy helpers this is not opt-in: nginx opens configured `access_log` targets at startup and fails hard if the directory is missing, so the Dockerfile bakes in an empty `/var/log/audit` (same "valid unmounted" treatment as `gateway.d`) — the runtime volume mount just shadows it.
 
@@ -104,7 +104,7 @@ cred-gateway also writes a JSON audit line per request (`log_format audit_json` 
 
 Node HTTP server on `:9000`, dependency-free like the broker. Polls `/var/log/audit/*.jsonl` every 500ms, broadcasts new lines over SSE at `/events`, and serves a minimal live-stream dashboard at `/`. Keeps a 200-event in-memory backlog so a client that connects mid-run sees recent history immediately.
 
-Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials — but note it is the one service whose safety the stack cannot supply. It publishes over HTTP whatever the trail contains, and the images write no events themselves: every line comes from a bind-mounted provider or addon file the deployment owns. `observer` is therefore only as leak-free as those files are, which is why `PLAYBOOK.md`'s "What is safe to log" is addressed to whoever writes them. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `dev` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
+Read-only consumer: mounts the `audit-logs` volume `:ro` and holds no credentials — but note it is the one service whose safety the stack cannot supply. It publishes over HTTP whatever the trail contains, and the images write no events themselves: every line comes from a bind-mounted provider or addon file the deployment owns. `observer` is therefore only as leak-free as those files are, which is why `PLAYBOOK.md`'s "What is safe to log" is addressed to whoever writes them. Detects `log-rotator`'s `copytruncate` rotation (file size shrinking means "start over from offset 0") rather than needing a reopen signal. Not on `secure` or `lab` — see "Non-obvious invariants" below — and its published port is bound to `127.0.0.1` on the host, so it's viewable from outside the stack but not from inside it.
 
 ### log-rotator (`stack/log-rotator/`)
 
@@ -112,9 +112,9 @@ Alpine + `logrotate` + busybox `crond`, mounting `audit-logs` read-write. `entry
 
 Runs as root, unlike every other service in this stack. That's deliberate here, not an oversight: broker (`node`) and proxy (`mitmproxy`) are different non-root uids writing into the same shared directory, and only a root process can reliably chmod it for both and copytruncate files regardless of which uid created them.
 
-### dev container (`stack/dev/`, `examples/*/dev/`)
+### lab container (`stack/lab/`, `examples/*/lab/`)
 
-`stack/dev/` is the minimal base image (Node 22 + curl + jq + ca-certificates). Individual examples extend it with their own `dev/Dockerfile` adding tools specific to that use case (e.g., `gh` CLI and `wrangler` in the dev-container example).
+`stack/lab/` is the minimal base image (Node 22 + curl + jq + ca-certificates). Individual examples extend it with their own `lab/Dockerfile` adding tools specific to that use case (e.g., `gh` CLI and `wrangler` in the dev-container example).
 
 `setup.sh` (postCreateCommand, idempotent):
 1. Installs the mitmproxy CA cert into the system trust store
@@ -139,7 +139,7 @@ Runs as root, unlike every other service in this stack. That's deliberate here, 
 
 **The broker's `identityCache` is lifetime-cached.** If the GitHub App is renamed, restart the broker to refresh it. All other caches are TTL-based (5 minutes).
 
-**CA cert persistence.** The mitmproxy CA cert lives in the `proxy-certs` named Docker volume, shared between the `proxy` container (where it's generated) and the `dev` container (read-only). The proxy's healthcheck gates on the cert file existing, so `postCreateCommand` cannot race cert generation. Removing the volume forces cert regeneration and requires a container rebuild.
+**CA cert persistence.** The mitmproxy CA cert lives in the `proxy-certs` named Docker volume, shared between the `proxy` container (where it's generated) and the `lab` container (read-only). The proxy's healthcheck gates on the cert file existing, so `postCreateCommand` cannot race cert generation. Removing the volume forces cert regeneration and requires a container rebuild.
 
 **`credential.useHttpPath false` in git config** is intentional, not a bug — see `PLAYBOOK.md`'s GitHub section for why.
 
