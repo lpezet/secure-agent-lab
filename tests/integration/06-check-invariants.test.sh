@@ -67,9 +67,13 @@ check_contains "quotes the offending line" "$out" "path=flow.request.path"
 
 suite "one planted violation per fail-severity check"
 d=$(mkdep planted)
-cat > "$d/proxy/050_custom.py" <<'PY'
+# Built at runtime, never committed. A credential-shaped literal in this file
+# would trip the lint's own repo-wide sweep, and the honest fix is to not put
+# one in the repo rather than to add another exclusion to that sweep.
+FAKE_GH="ghp_$(printf 'a%.0s' $(seq 26))"
+cat > "$d/proxy/050_custom.py" <<PY
 import audit
-SECRET = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+SECRET = "$FAKE_GH"
 def request(flow):
     if flow.request.pretty_host != "github.com":
         return
@@ -82,7 +86,7 @@ printf 'location /github/ {\n  proxy_pass http://broker:8080/github/token;\n}\n'
   > "$d/cred-gateway/wide.conf"
 printf 'location = /anthropic/cred {\n  proxy_pass http://broker:8080/anthropic/cred;\n}\n' \
   > "$d/cred-gateway/raw.conf"
-sed -i 's/GH_TOKEN: proxy-injected/GH_TOKEN: ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' "$d/compose.yaml"
+sed -i "s|GH_TOKEN: proxy-injected|GH_TOKEN: $FAKE_GH|" "$d/compose.yaml"
 out=$(run "$d")
 check_contains "exits 1" "$out" "EXIT=1"
 check_contains "pretty_host" "$out" "decides on the client-supplied Host header"
@@ -109,6 +113,41 @@ rm "$d/proxy/000_policy.py"
 out=$(run "$d")
 check_contains "exits 1" "$out" "EXIT=1"
 check_contains "names it" "$out" "000_policy.py is absent"
+
+suite "unmediated egress is a finding, in all three of its shapes"
+# internal: true on the lab network is what makes 001_allowlist.py enforcing
+# rather than advisory. Off is the pre-toggle status quo, so this has to fire on
+# a compose file that never had the key as well as on one that opted out.
+d=$(mkdep egress)
+out=$(run "$d")
+check_contains "the shipped default is clean" "$out" "0 fail"
+
+d=$(mkdep egress-nokey)
+sed -i '/internal: /d' "$d/compose.yaml"
+out=$(run "$d")
+check_contains "no internal: key at all is a finding" "$out" "no \`internal:\` key"
+check_contains "and fails the run" "$out" "EXIT=1"
+
+d=$(mkdep egress-off)
+sed -i 's/internal: ${LAB_INTERNAL:-true}/internal: false/' "$d/compose.yaml"
+out=$(run "$d")
+check_contains "an explicit opt-out is a finding" "$out" "lab network is not internal"
+
+d=$(mkdep egress-baddefault)
+sed -i 's/internal: ${LAB_INTERNAL:-true}/internal: ${LAB_INTERNAL:-false}/' "$d/compose.yaml"
+out=$(run "$d")
+check_contains "a flipped default is a finding" "$out" "lab network is not internal"
+
+suite "the egress check reads the network, not the service of the same name"
+# compose.yaml declares both a `lab:` service and a `lab:` network. An earlier
+# cut matched the service block and only looked correct because the real
+# network further down happened to supply the key it wanted.
+d=$(mkdep egress-scope)
+line=$(grep -n 'internal:' "$d/compose.yaml" | cut -d: -f1)
+svc=$(grep -n '^  lab:' "$d/compose.yaml" | head -1 | cut -d: -f1)
+sed -i '/internal: /d' "$d/compose.yaml"
+out=$(run "$d")
+check_not_contains "does not point at the service block" "$out" " $svc: lab network"
 
 suite "note-severity findings do not fail the run"
 d=$(mkdep noteonly)

@@ -62,7 +62,13 @@ this repo's GitHub URL, so you only need the example directory itself to get sta
 Two Docker networks enforce the boundary:
 
 - `secure` — broker, proxy, cred-gateway. The lab container is **not** on this network.
-- `lab` — lab, proxy, cred-gateway.
+- `lab` — lab, proxy, cred-gateway. **`internal: true`**, so it has no default
+  gateway: the only route out of the lab is the proxy. That is what makes the
+  egress allowlist enforcing rather than advisory — without it `HTTP_PROXY` is
+  a request the agent can decline with `curl --noproxy '*'`.
+
+  `secure` is deliberately *not* internal; the broker calls provider APIs
+  directly through it. Set `LAB_INTERNAL=false` to opt out — see PLAYBOOK.md.
 
 The broker is on `secure` only. Docker DNS will not resolve `broker` from the lab container,
 and there is no route even if it did. The only broker-adjacent surface reachable from lab is

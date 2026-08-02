@@ -298,6 +298,17 @@ for conf in "${AUDIT_COMPOSES[@]}"; do
   done
 done
 
+suite "the lab network is internal, so the proxy cannot be bypassed"
+# Without this, HTTP_PROXY is a request the agent can decline: `curl --noproxy
+# '*'` leaves the container without touching the proxy, which makes
+# 001_allowlist.py advisory rather than enforcing. secure is deliberately NOT
+# internal — broker calls provider APIs directly through it.
+for c in "${COMPOSES[@]}" tests/e2e/compose.yaml; do
+  [ -f "$c" ] || continue
+  if bad=$(inv_egress_unmediated "$c"); then ok "$c — lab network is internal"
+  else ko "$c — lab network permits unmediated egress" "$bad"; fi
+done
+
 suite "observer and log-rotator stay off secure/lab"
 # Deliberately no `networks:` key for either — see CLAUDE.md. They still land
 # on Compose's implicit `default` network, but every other service declares
