@@ -14,6 +14,11 @@ argument through, so `tests/run.sh 20` still means "integration, suite 20" and
 `FORCE_BUILD=1` still works. Each tier's `run.sh` is equally runnable on its
 own.
 
+**Prerequisites.** `docker` for everything except `00-config-lint`, and `jq`
+for `00-config-lint` — the provider-bank manifests are JSON and are read rather
+than pattern-matched. A missing prerequisite exits **2**, which is how it is
+told apart from a failing assertion (exit 1).
+
 | Tier | Credentials | Cost | Covers |
 |---|---|---|---|
 | [`integration/`](integration/README.md) | none — stubs and fixtures | free, ~60s | The security boundaries: whitelist behaviour, proxy host matching, egress allowlist, mount isolation |

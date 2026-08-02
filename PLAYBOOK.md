@@ -35,83 +35,79 @@ whether something already there should be kept, replaced, or extended.
 
 ## Known providers
 
-Concrete shape for the providers this stack already ships support for.
-Anything not listed here is a custom provider — see "A custom provider"
-under "Adding a credential provider" below.
+Each of these ships as a **bank entry** under [`bank/`](bank/) — the files
+themselves, plus a `provider.json` manifest declaring what they need. Install
+one by copying it (see "A known provider" below); do not retype it from a
+description.
+
+| Provider | Injects into | Exposed to lab | Entry |
+|---|---|---|---|
+| GitHub | `api.github.com`, `uploads.github.com` | `/github/credential`, `/github/identity` | [`bank/github/`](bank/github/) |
+| Anthropic | `api.anthropic.com` | nothing | [`bank/anthropic/`](bank/anthropic/) |
+| Cloudflare | `api.cloudflare.com` | nothing | [`bank/cloudflare/`](bank/cloudflare/) |
+
+Hosts, broker routes, env vars and secret files are **not** listed here — they
+are in each entry's `provider.json`, which is the thing the lint checks against
+the code. Duplicating them into prose is how the two drift.
+
+What follows is the part a manifest cannot express: why each entry is shaped
+the way it is. Read it before changing one.
 
 ### GitHub
 
-- Broker routes: `/github/token` (installation token, 5-minute safety-window
-  cache), `/github/credential` (same token, `git credential` output
-  format), `/github/identity` (App name + email for `git config`, cached
-  for the broker's lifetime — restart the broker if the GitHub App is
-  renamed).
-- Proxy (`010_github.py`): matches `api.github.com` and `uploads.github.com`
-  only. Never match `github.com` — git push/pull to it goes through the
-  HTTPS credential helper (via `cred-gateway`), not token injection; adding
-  `github.com` here would conflict with git's own Basic-auth handshake
-  inside the MITM'd tunnel.
-- `cred-gateway`: exact-match routes for `/github/credential` and
-  `/github/identity` only, proxying to the broker. Never expose
-  `/github/token` — that would hand the dev container a raw token.
-- Dev container: wire `git config credential.helper` to
-  `curl $GIT_CREDENTIAL_URL` (pointed at the cred-gateway route), set
-  `credential.useHttpPath false` (the App's installation already scopes
-  which repos it can reach — intentional, not a bug), force `gh` to HTTPS
-  (`gh config set git_protocol https`) so it can't bypass the proxy over
-  SSH, and set `git config user.name`/`user.email` from the
-  `/github/identity` route on every container start.
+- **Never match `github.com` in the addon** — only `api.` and `uploads.`. Git
+  push/pull to `github.com` authenticates through the HTTPS credential helper
+  (via `cred-gateway`), not header injection, and adding it here collides with
+  git's own Basic-auth handshake inside the MITM'd tunnel.
+- **Never expose `/github/token`** through cred-gateway. It is the raw
+  installation token; the two exposed routes hand over a `git credential`
+  response and an identity, not a reusable secret.
+- **`credential.useHttpPath false` is deliberate.** Git otherwise puts the repo
+  path in the credential lookup key, re-invoking the helper per path against a
+  gateway route that is exact-match and path-agnostic. The App installation
+  already scopes which repos are reachable. This is set by
+  [`bank/github/lab/setup.sh`](bank/github/lab/setup.sh), which is also why
+  that fragment is part of the entry rather than a step in this document.
+- **`/github/identity` is cached for the broker's lifetime**, not on a TTL.
+  Restart the broker if the App is renamed.
 
 ### Anthropic (Claude Code)
 
-**Claude Code's active credential is usually an OAuth token, not an API
-key.** A Claude subscription authenticates with `sk-ant-oat01-…`, sent as
+**Claude Code's active credential is usually an OAuth token, not an API key.**
+A Claude subscription authenticates with `sk-ant-oat01-…` sent as
 `Authorization: Bearer`, on a different rate-limit tier from an API key
-(`sk-ant-api03-…`, sent as `x-api-key`). Both work; injecting the wrong one
-is not an error, it silently bills and throttles differently. Generate the
-credential-type-aware shape below unless the end-user has said they want
-API-key billing.
+(`sk-ant-api03-…`, sent as `x-api-key`). Both work; injecting the wrong one is
+not an error, it silently bills and throttles differently. The entry handles
+both — `ANTHROPIC_AUTH_TOKEN_PATH` wins over `ANTHROPIC_API_KEY_PATH`, so
+switching to OAuth is a file change and nothing else. Both are `optional` in the
+manifest precisely because exactly one of them is normally set.
 
-- Broker route: `/anthropic/cred` — returns `{type, value}`, reading the
-  credential file fresh on each call (cheap local read, no need to cache).
-  Prefer `ANTHROPIC_AUTH_TOKEN_PATH` (`type: "auth_token"`) and fall back to
-  `ANTHROPIC_API_KEY_PATH` (`type: "api_key"`), so dropping in an OAuth
-  token is a file change and nothing else. `examples/claude-code/broker/anthropic.js`
-  is the reference implementation.
-- Proxy (`020_anthropic.py`): matches `api.anthropic.com` only. Strips both
-  `x-api-key` and `Authorization` from whatever the client sent, then
-  injects by type — `auth_token` → `Authorization: Bearer <value>`,
-  `api_key` → `x-api-key: <value>` plus a default `anthropic-version`
-  header. Blocks `/v1/organizations/*` (Admin API). Must use the
-  `responseheaders` hook and set `flow.response.stream = True` there —
-  touching `flow.response.content` on a streamed response buffers the
-  entire SSE body instead of passing chunks through live.
-- No `cred-gateway` route — the raw credential is never exposed to the dev
-  container.
-- Both examples now show this shape. A deployment generated before 1.4.0
-  from `examples/dev-container` may still carry the older single
-  `/anthropic/key` route with `x-api-key` injection — it keeps working, but
-  it cannot use an OAuth token, so move it across on the next
-  reconciliation rather than leaving it.
+- **The addon must use the `responseheaders` hook with
+  `flow.response.stream = True`**, not `response`. Touching
+  `flow.response.content` on a streamed response buffers the entire SSE body
+  instead of passing chunks through live.
+- **`/v1/organizations/*` (the Admin API) is blocked at the proxy**, so an
+  attempt costs no quota.
+- A deployment generated before 1.4.0 from `examples/dev-container` may still
+  carry the older single `/anthropic/key` route with `x-api-key` injection. It
+  keeps working but cannot use an OAuth token. Move it to the bank entry on the
+  next reconciliation rather than leaving it — `check-drift.sh` will show the
+  old file as having no counterpart.
 
 ### Cloudflare
 
-- Broker route: `/cloudflare/token?profile=` — mints a scoped token via the
-  Cloudflare API per named profile, cached per profile.
-- Proxy (`030_cloudflare.py`): matches `api.cloudflare.com` only, injects
-  the token. The caller can hint a profile via an `X-Cf-Profile` header,
-  stripped before forwarding to Cloudflare; default profile is
-  `workers-deploy` if the header is absent.
-- No `cred-gateway` route.
-- Dev container: `CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy value
-  satisfying `wrangler`'s "am I authenticated" check — never replace it
-  with a real token.
+- **The token is minted per named profile**, not read off disk. `X-Cf-Profile`
+  hints which one; it is stripped before forwarding. Absent, the default is
+  `workers-deploy`. Add profiles inside the broker provider, where the
+  permission-group IDs live.
+- **`CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy** satisfying `wrangler`'s
+  "am I authenticated" check. Never replace it with a real token.
 
 ## Generating a stack
 
 Produce:
 
-- A `compose.yaml` wiring `broker`, `proxy`, `cred-gateway`, `dev`, and
+- A `compose.yaml` wiring `broker`, `proxy`, `cred-gateway`, `lab`, and
   (if requested) `observer` + `log-rotator`, each pinned to `stack/<service>`
   at the chosen tag.
 - One directory per service, named after the service, holding only the
@@ -121,10 +117,10 @@ Produce:
   - `proxy/*.py` → `/addons` (numbered, e.g. `010_github.py`, load order is
     alphabetical)
   - `cred-gateway/*.conf` → `/etc/nginx/gateway.d`
-  - `dev/Dockerfile` extending `stack/dev`'s base image with any
+  - `lab/Dockerfile` extending `stack/lab`'s base image with any
     project-specific tools
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
-  `dev` (dev + proxy + cred-gateway). The dev container is never on
+  `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
 - `proxy/000_policy.py`, copied verbatim from `stack/proxy/addons/` at the
   pinned tag. The image ships no addons of its own — `/addons` exists only
@@ -136,6 +132,22 @@ Produce:
 - If `observer`/`log-rotator` are requested: no `networks:` entry for
   either — see the constraints below for why that's correct, not an
   omission.
+**Egress is mediated by default.** The `lab` network ships `internal: true`, so
+it has no default gateway and the proxy is the only route out. Without that,
+`HTTP_PROXY` is only a request — `curl --noproxy '*'` leaves the container
+untouched by any addon.
+
+Opt out with `LAB_INTERNAL=false` when the lab needs tooling that cannot use an
+HTTP proxy: raw sockets, `ssh`, anything resolving before it proxies. Proxied
+HTTP and HTTPS are unaffected either way, because the **proxy** resolves the
+hostname, not the client — so the symptom of a tool that needs the opt-out is
+DNS failure inside the lab, not a proxy error.
+
+Opting out costs egress mediation and nothing else: the broker stays unreachable
+from the lab regardless, because that is `secure` network isolation, which this
+flag does not touch. `scripts/check-invariants.sh` reports the opt-out as a
+finding on every run, by design — a disabled control should not be silent.
+
 - If egress filtering is requested (opt-in, off by default): copy
   `stack/proxy/addons/001_allowlist.py` in alongside `000_policy.py`, and
   mount the allowlist data file from a directory *other* than `proxy/` —
@@ -162,9 +174,9 @@ being generated:
 - `cred-gateway` snippets must use exact-match `location = /path` blocks,
   never a prefix match — a prefix like `location /github/` exposes sibling
   routes that must stay broker-only.
-- Expose a `cred-gateway` route only if dev tooling genuinely needs raw
+- Expose a `cred-gateway` route only if lab tooling genuinely needs raw
   access to it — almost never. Raw provider tokens/keys must never be
-  reachable from the dev container.
+  reachable from the lab container.
 - The proxy's Dockerfile must not add `USER mitmproxy` — the base image's
   entrypoint needs to run as root initially to `usermod` the `mitmproxy`
   user before dropping privileges via `gosu`.
@@ -179,12 +191,12 @@ being generated:
   var instead is readable via `docker inspect` and `/proc/<pid>/environ`,
   leaks into any process dump or crash report, and tends to end up committed
   in a `.env`. Follow the same convention for custom providers.
-- If a dev-side CLI tool needs a placeholder credential to pass its own
+- If a lab-side CLI tool needs a placeholder credential to pass its own
   "am I authenticated" check (e.g. `gh`, `wrangler`), use an obvious dummy
   value and let the proxy inject the real one at the wire level — never
-  put a real credential in the dev container's environment.
+  put a real credential in the lab container's environment.
 - `observer` and `log-rotator` must have no `networks:` entry at all —
-  that's what keeps them off `secure` and `dev` (Compose's implicit
+  that's what keeps them off `secure` and `lab` (Compose's implicit
   `default` network ends up containing only the two of them, since every
   other service declares an explicit `networks:` list). Do not "fix" this
   by adding one.
@@ -359,10 +371,42 @@ Update it as part of the upgrade, not after.
 
 ### A known provider
 
-Follow the concrete shape under "Known providers" above: add the
-broker/proxy/(rarely) cred-gateway files it describes, recreate the affected
-services (`docker compose up -d --force-recreate broker proxy`), then run the
-relevant check from "Verifying the stack" below.
+Copy the files, do not retype them. `<name>` is a directory under
+[`bank/`](bank/); everything the install needs is in its `provider.json`.
+
+1. **Check the pin.** If the entry's `min_stack` is above the tag your
+   `compose.yaml` builds from, stop — the install will look fine and fail at
+   runtime with `MODULE_NOT_FOUND` on `require("../audit")`. Repin first.
+2. **Copy** `bank/<name>/broker/<name>.js` → your `broker/`, and
+   `bank/<name>/cred-gateway/<name>.conf` → your `cred-gateway/` if the entry
+   has one.
+3. **Copy the addon with a prefix**: `bank/<name>/proxy/<name>.py` → your
+   `proxy/NNN_<name>.py`. Pick the lowest unused multiple of ten in the entry's
+   `load_band` — `provider` means 010–899. The bank ships no prefix because the
+   number is yours, not the entry's: two providers both wanting `030` would
+   otherwise be your problem to discover.
+4. **Secrets**: for each `secrets[]` entry, put the value in a file at
+   `<secrets-dir>/<file>` mode `0600` and add `<env>: /secrets/<file>` to the
+   broker's `environment:`.
+5. **Config**: for each `config[]` entry, add `<env>=` to `.env`.
+6. **Lab environment**: merge `lab_env` into the lab service's `environment:`.
+   These are literals — `proxy-injected` and URLs. A real credential here is a
+   bug, and `tests/integration/00-config-lint.test.sh` fails on one.
+7. **Lab setup**: if the entry has `lab_setup`, copy it into your `lab/` and
+   make sure your `setup.sh` runs it.
+8. **Allowlist**: append the entry's `hosts` to `/etc/agent-allowlist` if you
+   use one.
+9. **Restart, then verify**:
+   ```bash
+   docker compose up -d --force-recreate broker proxy cred-gateway
+   ```
+   then run the matching check from "Verifying the stack" below.
+
+Record what you installed in `.sal/installed.json` — name, assigned `NNN`,
+files written — so `check-drift.sh` compares exactly those entries rather than
+falling back to guessing which example you started from. Without it, drift
+still resolves by filename, which works but degrades on a deployment carrying
+many custom files.
 
 ### A custom provider
 
@@ -373,7 +417,15 @@ entry describes a fix to an addon or provider, the fix applies to your
 custom ones too and you have to port it by hand. Say so to the end-user at
 the time you add one — that is the deal they are accepting.
 
-For anything not covered above:
+**Start from the closest bank entry.** Copy `bank/<nearest>/` and edit it,
+rather than writing from this description. Every entry already has the host
+matching, the strip-before-fetch ordering, the bounded endpoint label and the
+audit calls in the right shape — which is the whole reason they exist, because
+each of those has been got wrong here at least once. Pick by resemblance:
+`anthropic` for "read a credential, inject a header", `cloudflare` for "mint
+something scoped per call", `github` for "the lab also needs a helper".
+
+Then, for anything the bank does not cover:
 
 **Broker** — add a file to the project's `broker/` directory (bind-mounted
 to `/app/providers`). Reads a credential from an env-var-specified path
@@ -398,7 +450,7 @@ up with `docker compose up -d --force-recreate proxy` — `entrypoint.sh`
 auto-discovers `*.py` at startup. Use the baked-in `audit.py`
 (`import audit; audit.log_event(...)`) the same way.
 
-**Cred-gateway** — only if dev tooling needs raw access to something the
+**Cred-gateway** — only if lab tooling needs raw access to something the
 broker/proxy path doesn't cover (rare). Add an exact-match snippet to the
 project's `cred-gateway/` directory (bind-mounted to
 `/etc/nginx/gateway.d`), proxying to a broker route. Pick it up with
@@ -447,8 +499,22 @@ paperwork.
 
    It exits non-zero on drift or a missing `000_policy.py`, so it also works
    as a pre-upgrade gate in CI. Custom providers are reported as `custom`
-   and don't fail the run — they can't drift, since they have nothing to
-   drift from, but step 4 still applies to them.
+   and don't drift-fail — they can't drift, having nothing to drift from.
+
+   **They are still checked.** `check-drift.sh` now also runs
+   `scripts/check-invariants.sh`, which asks the other question: is each file
+   safe *on its own terms*? That needs no upstream, no tag and no network, so
+   it reaches exactly the files the diff cannot — the ones you wrote. It is
+   also runnable alone:
+
+   ```bash
+   scripts/check-invariants.sh /path/to/deployment
+   ```
+
+   A findings-free scan is **not** a pass. These are greps against a known
+   list; a provider can be unsafe in ways none of them anticipate, and
+   "What is safe to log" below is the standard. Set `SKIP_INVARIANTS=1` to
+   run drift alone.
 
    The rest of this step is what the script automates, and what to do by
    hand if you're upgrading *from* a tag before 1.4.0 that doesn't ship it.
@@ -534,7 +600,7 @@ paperwork.
 
 Run these against the live `docker compose` stack after generating or
 changing anything (adjust service names below if the generated
-`compose.yaml` names them differently than `dev`, `broker`, `proxy`,
+`compose.yaml` names them differently than `lab`, `broker`, `proxy`,
 `cred-gateway`, `observer`).
 
 **All services healthy:**
@@ -545,12 +611,12 @@ docker compose ps
 
 Every service should be `running`/`healthy`, none restarting.
 
-**Broker is unreachable from the dev container** — the core security
-boundary, since `dev` is not on the `secure` network:
+**Broker is unreachable from the lab container** — the core security
+boundary, since `lab` is not on the `secure` network:
 
 ```
-docker compose exec dev getent hosts broker                              # should fail to resolve
-docker compose exec dev curl -sS --max-time 3 http://broker:8080/healthz # should fail to connect
+docker compose exec lab getent hosts broker                              # should fail to resolve
+docker compose exec lab curl -sS --max-time 3 http://broker:8080/healthz # should fail to connect
 ```
 
 Both failing is the pass condition; either succeeding means the network
@@ -559,23 +625,23 @@ boundary is broken.
 **`cred-gateway` only serves whitelisted routes:**
 
 ```
-docker compose exec dev curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/definitely-not-a-real-path
+docker compose exec lab curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/definitely-not-a-real-path
 # expect 403
 
-docker compose exec dev curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/github/identity
+docker compose exec lab curl -s -o /dev/null -w '%{http_code}\n' http://cred-gateway/github/identity
 # expect 200, only if github is configured
 ```
 
 **Each configured provider works end-to-end through the proxy**, using
-whatever client the dev container already has for it:
+whatever client the lab container already has for it:
 
 ```
-docker compose exec dev gh api /rate_limit   # github
-docker compose exec dev wrangler whoami      # cloudflare
+docker compose exec lab gh api /rate_limit   # github
+docker compose exec lab wrangler whoami      # cloudflare
 ```
 
 For Anthropic, the check is Claude Code (or whatever agent harness runs in
-the dev container) successfully making one real request — there usually
+the lab container) successfully making one real request — there usually
 isn't a separate CLI to probe with.
 
 **A spoofed `Host` header does not talk the proxy into forwarding to the
@@ -583,7 +649,7 @@ broker.** Plain HTTP through the proxy, so no certificate handling — and the
 second server the spoof needs to point at is one the stack already has:
 
 ```
-docker compose exec -T dev curl -s --max-time 8 --proxy http://proxy:8080 \
+docker compose exec -T lab curl -s --max-time 8 --proxy http://proxy:8080 \
   -H 'Host: api.anthropic.com' http://broker:8080/anthropic/cred
 # expect {"error":"internal host blocked by proxy policy"} — a 403 from 000_policy.py
 ```
@@ -597,7 +663,7 @@ never reaches it.
 **The Admin API block holds** (only if Anthropic is configured):
 
 ```
-docker compose exec -T dev curl -s https://api.anthropic.com/v1/organizations/me
+docker compose exec -T lab curl -s https://api.anthropic.com/v1/organizations/me
 # expect {"error":"Admin API blocked by proxy policy"} — 403 from 020_anthropic.py,
 # blocked at the proxy, so it costs no quota
 ```
@@ -608,7 +674,7 @@ deployment mounts one. `001_allowlist.py` is opt-in, and with no
 check passes vacuously on a stack that never enabled it:
 
 ```
-docker compose exec -T dev curl -s --proxy http://proxy:8080 http://neverallowed.example.com/
+docker compose exec -T lab curl -s --proxy http://proxy:8080 http://neverallowed.example.com/
 # expect {"error":"destination blocked by allowlist policy"}
 ```
 

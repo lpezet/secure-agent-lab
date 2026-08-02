@@ -1,0 +1,38 @@
+{
+  "name": "github",
+  "summary": "GitHub App installation token for api.github.com, plus git credential-helper and identity endpoints",
+  "min_stack": "1.1.0",
+  "load_band": "provider",
+  "hosts": ["api.github.com", "uploads.github.com"],
+  "secrets": [
+    {
+      "env": "GITHUB_APP_PRIVATE_KEY_PATH",
+      "file": "github-app.pem",
+      "prompt": "GitHub App private key (.pem)",
+      "multiline": true
+    }
+  ],
+  "config": [
+    {
+      "env": "GITHUB_APP_ID",
+      "prompt": "GitHub App ID",
+      "help": "https://github.com/settings/apps/<your-app>"
+    },
+    {
+      "env": "GITHUB_APP_INSTALLATION_ID",
+      "prompt": "Installation ID",
+      "help": "https://github.com/settings/installations"
+    }
+  ],
+  "broker_routes": [
+    { "path": "/github/token", "exposed": false },
+    { "path": "/github/credential", "exposed": true },
+    { "path": "/github/identity", "exposed": true }
+  ],
+  "lab_env": {
+    "GH_TOKEN": "proxy-injected",
+    "GIT_CREDENTIAL_URL": "http://cred-gateway/github/credential",
+    "GITHUB_IDENTITY_URL": "http://cred-gateway/github/identity"
+  },
+  "lab_setup": "lab/setup.sh"
+}

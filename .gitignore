@@ -2,3 +2,10 @@
 node_modules/
 *.log
 examples/*/workspace/
+
+# Local scratch — notes, session-resume commands, roadmap jottings. This repo
+# is public; personal working files do not belong in it.
+/TODO.md
+/resume.txt
+/NOTES.md
+/SCRATCH.md

@@ -129,8 +129,28 @@ example_path() {
   return 1
 }
 
+# bank_path <sub> <basename> — where a bank-installed file lives in the ref
+# tree, or nothing. Strips the NNN_ prefix the installer assigns, which is
+# deployment state by design and so cannot be in the bank; that prefix is the
+# single documented normalization in this comparison.
+#
+# Tried before the example fallback because it resolves by *name* rather than
+# by guessing which example a deployment started from. A deployment full of
+# custom files degrades that guess — count_mismatches counts every custom file
+# as a mismatch and so picks the wrong example to diff against — while a
+# bank-installed file resolves the same regardless of what sits beside it.
+bank_path() {
+  local sub="$1" base="$2" stripped name ext p
+  stripped="${base#[0-9][0-9][0-9]_}"
+  name="${stripped%.*}"; ext="${stripped##*.}"
+  p="$REF/bank/$name/$sub/$name.$ext"
+  [ -f "$p" ] && { printf '%s' "$p"; return 0; }
+  return 1
+}
+
 # count_mismatches <example-path> — how badly a deployment matches an example.
-# Used only to guess the counterpart when the stub does not record one.
+# Used only to guess the counterpart when the stub does not record one, and
+# only for files bank_path could not resolve.
 count_mismatches() {
   local ex="$1" n=0 sub f base
   for sub in proxy broker cred-gateway; do
@@ -172,7 +192,30 @@ fi
 printf '\n%sdeployment%s  %s\n' "$B" "$N" "$DEPLOY"
 printf '%spinned%s      %s (%s)\n' "$B" "$N" "$PIN" "$(basename "$COMPOSE")"
 printf '%scomparing%s   %s\n' "$B" "$N" "$REF_LABEL"
-printf '%ssource%s      %s\n\n' "$B" "$N" "$SOURCE_NOTE"
+printf '%ssource%s      %s\n' "$B" "$N" "$SOURCE_NOTE"
+
+# .sal/installed.json is the authoritative record of which bank entries a
+# deployment carries — name, assigned NNN, files written (see PLAYBOOK, "A
+# known provider"). Nothing writes it yet: the install steps are normative for
+# an installer that does not exist, and a person following the playbook by hand
+# will not produce one. So this reads it when it is there and is silent when it
+# is not. Absence is the status quo for a deployment installed by hand, not a
+# fault; resolution falls through to matching by name, which needs no record.
+SAL="$DEPLOY/.sal/installed.json"
+SAL_NAMES=""
+if [ -f "$SAL" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    SAL_NAMES=$(jq -r '(.installed // .)[]?.name // empty' "$SAL" 2>/dev/null | sort -u | tr '\n' ' ')
+    [ -n "$SAL_NAMES" ] && printf '%sbank%s        %s(recorded in .sal/)\n' "$B" "$N" "$SAL_NAMES"
+  else
+    printf '%sbank%s        .sal/installed.json present, jq missing — not read\n' "$B" "$N"
+  fi
+fi
+printf '\n'
+for n in $SAL_NAMES; do
+  [ -d "$REF/bank/$n" ] ||
+    drift ".sal/" "records bank entry '$n', which does not exist at $REF_LABEL"
+done
 
 if [ "$REF_COUNT" -gt 1 ]; then
   drift "compose.yaml" "services pinned at different refs: $(printf '%s' "$REFS" | tr '\n' ' ')"
@@ -221,6 +264,9 @@ for sub in proxy broker cred-gateway; do
     # without this the allowlist addon reads as a custom file with no owner.
     if [ "$sub" = "proxy" ] && [ -f "$REF/stack/proxy/addons/$base" ]; then
       compare "$base" "$f" "$REF/stack/proxy/addons/$base" "stack/proxy/addons/"
+    elif bp=$(bank_path "$sub" "$base"); then
+      bn="${bp#$REF/bank/}"; bn="${bn%%/*}"
+      compare "$base" "$f" "$bp" "bank/$bn/$sub/"
     elif [ -f "$EX/$sub/$base" ]; then
       compare "$base" "$f" "$EX/$sub/$base" "$(basename "${EX%/.devcontainer}")/$sub/"
     else
@@ -241,11 +287,38 @@ fi
 printf '%ssummary%s     %d drift · %d missing · %d custom · %d note\n' "$B" "$N" \
   "$DRIFT" "$MISSING" "$CUSTOM" "$NOTE"
 
-if [ "$((DRIFT + MISSING))" -gt 0 ]; then
-  printf '\nReconcile with PLAYBOOK.md "Upgrading" step 3, then update the stub'\''s\n'
-  printf '`Reconciled:` line. Custom files are yours: no upstream fix reaches them.\n'
+# ------------------------------------------------------------- invariant scan
+#
+# Drift answers "does your copy match ours?". For a custom file there is no
+# ours, so it answers `custom` and diffs nothing — which is how a deployment
+# reconciled everything this script reported and still had two of its own addons
+# writing secrets into the audit trail (#26).
+#
+# So the second question gets asked here rather than left to be remembered:
+# is each file safe on its own terms? Same library the upstream lint uses.
+INV_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-invariants.sh"
+INV_RC=0
+if [ "${SKIP_INVARIANTS:-0}" = 1 ]; then
+  :
+elif [ -x "$INV_SH" ] || [ -f "$INV_SH" ]; then
+  printf '\n'
+  bash "$INV_SH" --quiet "$DEPLOY" || INV_RC=$?
+else
+  note "check-invariants.sh" "not found beside this script — invariants not scanned"
+fi
+
+if [ "$((DRIFT + MISSING))" -gt 0 ] || [ "$INV_RC" != 0 ]; then
+  [ "$((DRIFT + MISSING))" -gt 0 ] && {
+    printf '\nReconcile with PLAYBOOK.md "Upgrading" step 3, then update the stub'\''s\n'
+    printf '`Reconciled:` line. Custom files are yours: no upstream fix reaches them.\n'
+  }
+  [ "$INV_RC" != 0 ] && {
+    printf '\nThe invariant findings above are in files this script cannot diff.\n'
+    printf 'They are yours to fix; PLAYBOOK.md "What is safe to log" is the standard.\n'
+  }
   exit 1
 fi
-printf '\nNo drift. Custom files above are still yours to review against the\n'
-printf 'generation constraints when an addon or provider fix lands upstream.\n'
+printf '\nNo drift, no invariant findings. Custom files are still yours to review\n'
+printf 'against the generation constraints — these checks are a known list, not\n'
+printf 'a review, and cannot see a way of being unsafe nobody has thought of.\n'
 exit 0

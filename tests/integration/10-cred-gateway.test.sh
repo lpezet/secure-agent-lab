@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cred-gateway: the whitelist boundary between the dev container and the broker.
+# cred-gateway: the whitelist boundary between the lab container and the broker.
 #
 # Runs the real image against a stub broker that answers every path with
 # "BROKER-HIT <uri>", so each assertion distinguishes "reached the broker" from
@@ -54,7 +54,7 @@ for p in /github/credential /github/identity; do
   check_contains "$p reaches the broker" "$(http_body "http://$GW$p")" "BROKER-HIT $p"
 done
 
-# Denied: exposing any of these lets dev exfiltrate a usable secret.
+# Denied: exposing any of these lets lab exfiltrate a usable secret.
 for p in /github/token /anthropic/key /anthropic/cred /cloudflare/token /cloudflare/token?profile=x; do
   check "GET $p is denied" "403" "$(http_code "http://$GW$p")"
 done

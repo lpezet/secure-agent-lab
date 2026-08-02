@@ -10,26 +10,50 @@ cd "$REPO_ROOT"
 SNIPPETS=(examples/claude-code/cred-gateway/*.conf examples/dev-container/.devcontainer/cred-gateway/*.conf)
 COMPOSES=(stack/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 
+BANK_SCHEMA="bank/schema/provider.schema.json"
+require_jq   # manifests are JSON and are read, not pattern-matched
+
+# The checks themselves live in scripts/lib/invariants.sh, shared with
+# scripts/check-invariants.sh so a deployment can run the same ones against its
+# own files (#26). This suite is the "is OUR code safe?" caller.
+. "$REPO_ROOT/scripts/lib/invariants.sh"
+
 suite "cred-gateway snippets use exact-match locations"
 # A prefix match like `location /github/` exposes every broker route under it,
 # including /github/token. tests/integration/10 proves that leak is real.
-for f in "${SNIPPETS[@]}"; do
-  bad=$(grep -nE '^[[:space:]]*location[[:space:]]+[^=]' "$f" || true)
-  if [ -z "$bad" ]; then ok "$f — all locations exact-match"
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+  [ -f "$f" ] || continue
+  if bad=$(inv_location_prefix "$f"); then ok "$f — all locations exact-match"
   else ko "$f — non-exact location" "$bad"; fi
 done
 
 suite "snippets do not expose raw-credential endpoints"
-# These hand the dev container a usable secret rather than spending it on
-# dev's behalf. They belong in a proxy addon, never in the gateway.
-for f in "${SNIPPETS[@]}"; do
-  for path in /github/token /anthropic/key /anthropic/cred /cloudflare/token; do
-    if grep -q "location[[:space:]]*=[[:space:]]*$path\b" "$f"; then
-      ko "$f — exposes $path" "raw credential reachable from dev"
+# These hand the lab container a usable secret rather than spending it on
+# lab's behalf. They belong in a proxy addon, never in the gateway.
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+  [ -f "$f" ] || continue
+  if bad=$(inv_raw_cred_endpoint "$f"); then ok "$f — exposes no raw-credential route"
+  else ko "$f — exposes a raw-credential route" "$bad"; fi
+done
+
+suite "the scanner's deny list covers every unexposed bank route"
+# INV_DENY_PATHS is static because scripts/check-invariants.sh runs on a
+# deployment with no checkout and cannot derive it from bank/*/provider.json.
+# This is what stops it lagging: adding a provider whose unexposed route is
+# missing from the library fails here rather than silently narrowing what a
+# deployment gets checked for. Superset, not equality — retired routes stay in
+# the list after no manifest mentions them, which is the point of keeping them.
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  while IFS= read -r route; do
+    [ -n "$route" ] || continue
+    if printf '%s\n' $INV_DENY_PATHS | grep -qx "$route"; then
+      ok "INV_DENY_PATHS covers $route"
     else
-      ok "$f — does not expose $path"
+      ko "INV_DENY_PATHS is missing $route" \
+         "declared \"exposed\": false in $m — add it to scripts/lib/invariants.sh"
     fi
-  done
+  done < <(jq -r '.broker_routes[] | select(.exposed | not) | .path' "$m")
 done
 
 suite "snippets do not redeclare the rate-limit zone"
@@ -62,7 +86,7 @@ for c in examples/claude-code/compose.yaml examples/dev-container/.devcontainer/
   if grep -qE ':/etc/nginx/gateway\.d:ro( |$)' "$c"; then
     ok "$c — snippets mounted read-only at /etc/nginx/gateway.d"
   else
-    ko "$c — snippet mount missing or writable" "snippets are the whitelist; dev must not be able to edit them"
+    ko "$c — snippet mount missing or writable" "snippets are the whitelist; lab must not be able to edit them"
   fi
 done
 
@@ -78,31 +102,27 @@ else
   ko "$c — nested read-only bind missing" "agent could widen the proxy allowlist or gateway whitelist"
 fi
 
-suite "dev containers hold no real credentials"
+suite "lab containers hold no real credentials"
 # CLAUDE.md invariant: these are dummy values that satisfy client-side "am I
 # authenticated?" checks. The proxy strips and replaces them at the wire level.
 for c in "${COMPOSES[@]}"; do
-  for var in GH_TOKEN CLOUDFLARE_API_TOKEN ANTHROPIC_API_KEY; do
-    line=$(grep -E "^[[:space:]]*$var:" "$c" || true)
-    [ -z "$line" ] && continue
-    val=$(printf '%s' "$line" | sed 's/.*: *//' | tr -d '"'"'"' ')
-    if [ "$val" = "proxy-injected" ]; then
-      ok "$c — $var is the dummy placeholder"
-    else
-      ko "$c — $var is not 'proxy-injected'" "found: $val"
-    fi
-  done
+  if bad=$(inv_real_credential "$c"); then ok "$c — placeholder vars are all inert"
+  else ko "$c — a placeholder var holds something else" "$bad"; fi
 done
 
 suite "no credential material committed"
 # Length-bounded so `.env.example` placeholders (sk-ant-..., ghp_xxx) do not
 # trip the check while a real key still would.
-for pat in 'sk-ant-[A-Za-z0-9_-]{20,}' 'ghp_[A-Za-z0-9]{20,}' 'github_pat_[A-Za-z0-9_]{20,}' \
-           'BEGIN RSA PRIVATE KEY' 'BEGIN PRIVATE KEY' 'BEGIN OPENSSH PRIVATE KEY'; do
-  hits=$(git grep -lE "$pat" -- . ':!tests/integration/00-config-lint.test.sh' 2>/dev/null || true)
+# Patterns come from the library; the traversal does not. git grep covers the
+# whole repo and respects .gitignore, which is the right sweep here and is not
+# something a scanner pointed at one deployment directory can do.
+while IFS= read -r pat; do
+  hits=$(git grep -lE "$pat" -- . ':!tests/integration/00-config-lint.test.sh' ':!scripts/lib/invariants.sh' 2>/dev/null || true)
   if [ -z "$hits" ]; then ok "no match for /$pat/"
   else ko "credential-shaped string committed: /$pat/" "$hits"; fi
-done
+done <<EOF
+$INV_CRED_PATTERNS
+EOF
 
 suite "audit events reference an exception only via .code or .name"
 # Not the security control. The audit trail is written entirely by whatever
@@ -124,44 +144,21 @@ suite "audit events reference an exception only via .code or .name"
 # references, and flag any mention of the exception variable that survives.
 for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
          examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
-         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+         examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/broker/*.js bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
-  bad=$(awk '
-    # Comments are prose (these files explain the anti-pattern in their own).
-    { line = $0; sub(/[[:space:]]*(\/\/|#).*$/, "", line) }
-    !inside && line ~ /log_?[Ee]vent\(/ { inside = 1; start = NR; buf = ""; depth = 0 }
-    inside {
-      buf = buf " " line
-      n = gsub(/\(/, "(", line); depth += n
-      n = gsub(/\)/, ")", line); depth -= n
-      if (depth > 0) next
-      inside = 0
-      t = buf
-      # Quoted literals are values, not references — "Error" is fine. Only
-      # brace-free ones though: an f-string is a reference wearing a literal
-      # and f"{e}" leaks exactly like str(e). Backticks are never stripped, so
-      # a template literal interpolating ${err} stays visible too.
-      gsub(/"[^"{}]*"/, "", t); gsub(/'"'"'[^'"'"'{}]*'"'"'/, "", t)
-      # Field names: `error:` in JS, error= in Python. A key is not a reference.
-      gsub(/(err|error|e|ex|exc)[[:space:]]*[:=]/, "", t)
-      # The two permitted references.
-      gsub(/(err|error|e|ex|exc)\.(code|name)/, "", t)
-      # Anything left that names the exception is the violation, whatever the
-      # syntax around it.
-      if (t ~ /(^|[^[:alnum:]_.])(err|error|e|ex|exc)([^[:alnum:]_]|$)/) print start ": " buf
-    }' "$f")
-  if [ -z "$bad" ]; then ok "$(basename "$f") — exception referenced safely or not at all"
-  else ko "$f — audit event can carry exception text" "$bad"; fi
+  if bad=$(inv_exception_quoted "$f"); then ok "$(basename "$f") — exception referenced safely or not at all"
+  else ko "$f — audit event quotes an exception" "$bad"; fi
 done
 
 suite "github addon does not match github.com"
 # Documented invariant: git push/pull authenticates through the credential
 # helper. Matching github.com here collides with git's Basic auth handshake
 # inside the MITMed tunnel.
-for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_github.py; do
+for f in examples/*/proxy/010_github.py examples/*/.devcontainer/proxy/010_github.py \
+         bank/github/proxy/github.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -nE '"github\.com"|'\''github\.com'\''' "$f" || true)
-  if [ -z "$bad" ]; then ok "$f — matches api./uploads. hosts only"
+  if bad=$(inv_github_com_matched "$f"); then ok "$f — matches api./uploads. hosts only"
   else ko "$f — matches github.com" "$bad"; fi
 done
 
@@ -182,21 +179,11 @@ suite "only the policy addon references pretty_host in code"
 #
 # Comments and docstrings are stripped first — every shipped addon explains
 # this anti-pattern in its own prose, which is the point.
-for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
   [ "$(basename "$f")" = "000_policy.py" ] && continue
-  bad=$(awk '
-    { line = $0; sub(/#.*$/, "", line) }
-    # Same-line docstrings ("""...""") close as fast as they open, so the
-    # block counter below never sees them. Drop them first, or every addon
-    # with a one-line docstring naming the anti-pattern reports itself.
-    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
-    { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
-    ds  { if (q % 2 == 1) ds = 0; next }
-    q % 2 == 1 { ds = 1; next }
-    line ~ /pretty_host/ { print NR ": " $0 }
-  ' "$f")
-  if [ -z "$bad" ]; then ok "$(basename "$f") — decides on flow.request.host"
+  if bad=$(inv_pretty_host "$f"); then ok "$(basename "$f") — decides on flow.request.host"
   else ko "$f — references pretty_host outside a comment" "$bad"; fi
 done
 
@@ -209,10 +196,10 @@ suite "addons log a parsed endpoint, never a raw request path"
 # adds a provider, so the shipped pattern has to be the safe one.
 # Backticked mentions are prose (the addons explain the anti-pattern in their
 # own docstrings), so only real keyword arguments count.
-for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py; do
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -n 'path=flow\.request\.path' "$f" | grep -v '`' || true)
-  if [ -z "$bad" ]; then ok "$(basename "$f") — no raw path in an audit event"
+  if bad=$(inv_raw_path_logged "$f"); then ok "$(basename "$f") — no raw path in an audit event"
   else ko "$f — logs a raw request path" "$bad"; fi
 done
 
@@ -231,8 +218,7 @@ done
 for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
          stack/proxy/addons/*.py; do
   [ -f "$f" ] || continue
-  bad=$(grep -n 'flow\.request\.path\.split("/")' "$f" | grep -v '`' || true)
-  if [ -z "$bad" ]; then ok "$(basename "$f") — no \"/\" split off a raw path"
+  if bad=$(inv_raw_path_split "$f"); then ok "$(basename "$f") — no \"/\" split off a raw path"
   else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
 done
 
@@ -240,8 +226,8 @@ suite "policy addon loads before provider addons"
 # 000_policy.py must run first; entrypoint.sh globs alphabetically.
 for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do
   [ -d "$d" ] || continue
-  first=$(ls "$d"/*.py 2>/dev/null | head -1 | xargs -r basename)
-  check "$d — first addon is 000_policy.py" "000_policy.py" "$first"
+  if bad=$(inv_policy_addon_first "$d"); then ok "$d — first addon is 000_policy.py"
+  else ko "$d — policy addon does not load first" "$bad"; fi
 done
 
 suite "examples build from a release tag, not a branch"
@@ -264,20 +250,20 @@ for c in examples/claude-code/compose.yaml examples/dev-container/.devcontainer/
   fi
 done
 
-suite "dev mounts land in the container's HOME"
+suite "lab mounts land in the container's HOME"
 # When examples/claude-code stopped running as root, HOME moved to /home/agent
 # but the compose mounts stayed at /root/. Nothing failed loudly: Claude Code
 # read $HOME, found an empty directory, and quietly lost its settings and auth
 # on every recreate. Derive HOME from the Dockerfile rather than hardcoding it,
 # so this keeps working if the user is renamed again.
-CC_DOCKERFILE=examples/claude-code/dev/Dockerfile
+CC_DOCKERFILE=examples/claude-code/lab/Dockerfile
 CC_COMPOSE=examples/claude-code/compose.yaml
 if [ -f "$CC_DOCKERFILE" ] && [ -f "$CC_COMPOSE" ]; then
   home=$(grep -oP '^ENV HOME=\K\S+' "$CC_DOCKERFILE" | tail -1)
   if [ -z "$home" ]; then
-    skip "claude-code dev HOME" "no ENV HOME in $CC_DOCKERFILE — image uses the base default"
+    skip "claude-code lab HOME" "no ENV HOME in $CC_DOCKERFILE — image uses the base default"
   else
-    ok "claude-code dev HOME is $home"
+    ok "claude-code lab HOME is $home"
     # Every state mount the agent needs to write must sit under it.
     for m in .claude .claude.json .config; do
       target=$(grep -oE "\./workspace/${m//./\\.}:[^:[:space:]]+" "$CC_COMPOSE" | head -1 | cut -d: -f2)
@@ -287,7 +273,7 @@ if [ -f "$CC_DOCKERFILE" ] && [ -f "$CC_COMPOSE" ]; then
         check "workspace/$m mounts under $home" "$home/$m" "$target"
       fi
     done
-    check_not_contains "no dev mount targets /root" "$(grep -A20 '^  dev:' "$CC_COMPOSE")" ":/root/"
+    check_not_contains "no lab mount targets /root" "$(grep -A20 '^  lab:' "$CC_COMPOSE")" ":/root/"
   fi
 fi
 
@@ -312,7 +298,18 @@ for conf in "${AUDIT_COMPOSES[@]}"; do
   done
 done
 
-suite "observer and log-rotator stay off secure/dev"
+suite "the lab network is internal, so the proxy cannot be bypassed"
+# Without this, HTTP_PROXY is a request the agent can decline: `curl --noproxy
+# '*'` leaves the container without touching the proxy, which makes
+# 001_allowlist.py advisory rather than enforcing. secure is deliberately NOT
+# internal — broker calls provider APIs directly through it.
+for c in "${COMPOSES[@]}" tests/e2e/compose.yaml; do
+  [ -f "$c" ] || continue
+  if bad=$(inv_egress_unmediated "$c"); then ok "$c — lab network is internal"
+  else ko "$c — lab network permits unmediated egress" "$bad"; fi
+done
+
+suite "observer and log-rotator stay off secure/lab"
 # Deliberately no `networks:` key for either — see CLAUDE.md. They still land
 # on Compose's implicit `default` network, but every other service declares
 # an explicit `networks:` list and never joins `default`, so that network
@@ -345,6 +342,9 @@ suite "examples only depend on the stack audit helpers when their pin can back i
 # silently missing the audit trail. Derived from each example's own pin
 # rather than hardcoded per example, so this keeps working unattended as
 # examples upgrade one at a time instead of needing a manual edit here.
+# The floor: the stack release that introduced audit.js/audit.py. Used when jq
+# is unavailable, and as the starting point each example's requirement is
+# raised from.
 AUDIT_MIN="1.1.0"
 EXAMPLE_COMPOSES=(examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 EXAMPLE_DIRS=(examples/claude-code examples/dev-container/.devcontainer)
@@ -354,26 +354,236 @@ for i in "${!EXAMPLE_COMPOSES[@]}"; do
   tag=$(grep -oE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
   if [ -z "$tag" ]; then skip "$dir — no pinned tag found" ""; continue; fi
 
-  higher=$(printf '%s\n%s\n' "$AUDIT_MIN" "$tag" | sort -V | tail -1)
+  # Suite E: the requirement is the highest min_stack among the bank entries
+  # this example actually vendors, not one constant for every example. An entry
+  # that needs 1.5.0 raises the bar for the examples carrying it and for nobody
+  # else — which is the whole reason min_stack is a manifest field rather than
+  # a note in the changelog.
+  required="$AUDIT_MIN"
+  for bf in "$dir"/broker/*.js "$dir"/proxy/*.py; do
+    [ -f "$bf" ] || continue
+    bb=$(basename "$bf"); bs=${bb#[0-9][0-9][0-9]_}; bn=${bs%.*}
+    bm="bank/$bn/provider.json"
+    [ -f "$bm" ] || continue
+    required=$(printf '%s\n%s\n' "$required" "$(jq -r .min_stack "$bm")" | sort -V | tail -1)
+  done
+
+  higher=$(printf '%s\n%s\n' "$required" "$tag" | sort -V | tail -1)
   if [ "$higher" = "$tag" ]; then
     for f in "$dir"/broker/*.js; do
       [ -f "$f" ] || continue
-      check_contains "$f (pinned v$tag) uses the audit helper" "$(cat "$f")" 'require("../audit")'
+      check_contains "$f (pinned v$tag, needs v$required) uses the audit helper" "$(cat "$f")" 'require("../audit")'
     done
     for f in "$dir"/proxy/*.py; do
       [ -f "$f" ] || continue
-      check_contains "$f (pinned v$tag) uses the audit helper" "$(cat "$f")" "import audit"
+      check_contains "$f (pinned v$tag, needs v$required) uses the audit helper" "$(cat "$f")" "import audit"
     done
   else
     for f in "$dir"/broker/*.js; do
       [ -f "$f" ] || continue
-      check_not_contains "$f (pinned v$tag, predates audit.js) does not require it" "$(cat "$f")" 'require("../audit")'
+      check_not_contains "$f (pinned v$tag, below the v$required its entries need) does not require audit.js" "$(cat "$f")" 'require("../audit")'
     done
     for f in "$dir"/proxy/*.py; do
       [ -f "$f" ] || continue
-      check_not_contains "$f (pinned v$tag, predates audit.py) does not import it" "$(cat "$f")" "import audit"
+      check_not_contains "$f (pinned v$tag, below the v$required its entries need) does not import audit.py" "$(cat "$f")" "import audit"
     done
   fi
+done
+
+# ---------------------------------------------------------------------------
+# Suite A — bank manifests are well-formed.
+#
+# The constraints are read OUT OF the schema (required[], the load_band enum,
+# the name pattern) rather than restated here. Tightening the schema tightens
+# this suite in the same commit; restating them would let the two drift, which
+# is the same failure mode as the hardcoded route list this bank exists to
+# retire.
+#
+# This is not full JSON Schema validation — that would put a validator on the
+# host for the one suite that otherwise needs nothing but bash. jq is a soft
+# dependency: without it these checks skip and the rest of the lint still runs.
+# ---------------------------------------------------------------------------
+suite "bank manifests are well-formed"
+BANK_SCHEMA="bank/schema/provider.schema.json"
+bank_entries=(bank/*/)
+if [ ! -f "$BANK_SCHEMA" ]; then
+  ko "bank schema present" "$BANK_SCHEMA missing"
+elif ! jq -e . "$BANK_SCHEMA" >/dev/null 2>&1; then
+  ko "bank schema is valid JSON" "$BANK_SCHEMA does not parse"
+else
+  ok "$BANK_SCHEMA parses"
+  req_fields=$(jq -r '.required[]' "$BANK_SCHEMA")
+  name_pat=$(jq -r '.properties.name.pattern' "$BANK_SCHEMA")
+  bands=$(jq -r '.properties.load_band.enum[]' "$BANK_SCHEMA")
+  # Every top-level property the schema knows about, so a stray key is caught
+  # even though we are not running a real validator.
+  known=$(jq -r '.properties | keys[]' "$BANK_SCHEMA")
+
+  found_entry=0
+  for d in "${bank_entries[@]}"; do
+    [ -d "$d" ] || continue
+    case "$d" in bank/schema/) continue ;; esac
+    found_entry=1
+    entry="${d%/}"; base="$(basename "$entry")"; man="$entry/provider.json"
+
+    if [ ! -f "$man" ]; then ko "$entry — has provider.json" "missing"; continue; fi
+    if ! jq -e . "$man" >/dev/null 2>&1; then ko "$man — valid JSON" "does not parse"; continue; fi
+
+    for f in $req_fields; do
+      if jq -e --arg k "$f" 'has($k)' "$man" >/dev/null; then ok "$man — has required .$f"
+      else ko "$man — missing required .$f" "schema requires it"; fi
+    done
+
+    mname=$(jq -r '.name // ""' "$man")
+    check "$man — .name matches directory name" "$mname" "$base"
+    if printf '%s' "$mname" | grep -qE "$name_pat"; then ok "$man — .name matches schema pattern"
+    else ko "$man — .name violates schema pattern" "$mname !~ $name_pat"; fi
+
+    ms=$(jq -r '.min_stack // ""' "$man")
+    if printf '%s' "$ms" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then ok "$man — .min_stack is semver ($ms)"
+    else ko "$man — .min_stack is not semver" "got '$ms'"; fi
+
+    lb=$(jq -r '.load_band // ""' "$man")
+    if printf '%s\n' $bands | grep -qx "$lb"; then ok "$man — .load_band in schema enum ($lb)"
+    else ko "$man — .load_band not in schema enum" "got '$lb', want one of: $(echo $bands)"; fi
+
+    for k in $(jq -r 'keys[]' "$man"); do
+      if printf '%s\n' $known | grep -qx "$k"; then ok "$man — .$k is a known field"
+      else ko "$man — unknown field .$k" "not in schema properties"; fi
+    done
+
+    # Files the manifest implies must exist, and no file may ride along that
+    # the manifest never mentions. Both directions: a missing addon breaks the
+    # install, a stray file is something nobody reviewed.
+    implied="provider.json broker/$base.js proxy/$base.py"
+    jq -e '.broker_routes[] | select(.exposed)' "$man" >/dev/null 2>&1 \
+      && implied="$implied cred-gateway/$base.conf"
+    ls=$(jq -r '.lab_setup // ""' "$man"); [ -n "$ls" ] && implied="$implied $ls"
+
+    for rel in $implied; do
+      if [ -f "$entry/$rel" ]; then ok "$entry/$rel exists"
+      else ko "$entry/$rel missing" "implied by the manifest"; fi
+    done
+    while IFS= read -r actual; do
+      rel="${actual#$entry/}"
+      if printf '%s\n' $implied | grep -qx "$rel"; then ok "$entry/$rel is implied by the manifest"
+      else ko "$entry/$rel is not implied by the manifest" "stray file in a bank entry"; fi
+    done < <(find "$entry" -type f | sort)
+  done
+  [ "$found_entry" = 0 ] && skip "bank entries" "none present"
+fi
+
+# ---------------------------------------------------------------------------
+# Suite B — addons match their declared hosts, in both directions.
+#
+# Generalizes "github addon does not match github.com" to every provider. That
+# suite is kept rather than deleted, now as defence in depth rather than as a
+# fallback: it asserts the invariant directly against the file, where this one
+# reaches the examples only transitively (bank is clean AND suite D says the
+# examples match it). One grep is cheap insurance on the one invariant this
+# project has actually shipped a violation of.
+#
+# Both directions matter. An addon matching a host the manifest omits is an
+# addon injecting somewhere the allowlist seed never authorized; a manifest
+# listing a host the addon ignores seeds egress for a destination nothing
+# validates. Comments and docstrings are stripped with the same awk as the
+# pretty_host suite — every addon names hostnames in its own prose.
+# ---------------------------------------------------------------------------
+suite "bank addons match their declared hosts"
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  nm=$(jq -r .name "$m"); addon="bank/$nm/proxy/$nm.py"
+  [ -f "$addon" ] || continue
+  declared=$(jq -r '.hosts[]' "$m" | sort -u)
+  actual=$(awk '
+    { line = $0; sub(/#.*$/, "", line) }
+    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
+    { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
+    ds  { if (q % 2 == 1) ds = 0; next }
+    q % 2 == 1 { ds = 1; next }
+    { print line }
+  ' "$addon" \
+    | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
+    | tr -d '"'\''' | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+  extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
+  if [ -z "$missing" ] && [ -z "$extra" ]; then
+    ok "$addon — hosts agree with $m ($(echo $declared))"
+  else
+    ko "$addon — hosts disagree with $m" \
+     "declared but not matched: ${missing:-none} | matched but not declared: ${extra:-none}"
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Suite C — gateway snippets expose only declared-exposed routes.
+#
+# Clause 2 of #32 §3 ("unexposed routes appear in no .conf, in any entry") is
+# enforced by the deny-paths suite at the top, which now derives its list from
+# these manifests and globs bank/*/cred-gateway too. This covers the other two:
+# every exposed route is actually exposed, and every exposed location is a
+# route the manifest declared.
+# ---------------------------------------------------------------------------
+suite "bank gateway snippets expose exactly their declared-exposed routes"
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  nm=$(jq -r .name "$m"); conf="bank/$nm/cred-gateway/$nm.conf"
+  exposed=$(jq -r '.broker_routes[] | select(.exposed) | .path' "$m" | sort -u)
+  if [ -z "$exposed" ]; then
+    if [ -f "$conf" ]; then
+      ko "$nm — has a .conf but declares no exposed route" "$conf should not exist"
+    else
+      ok "$nm — declares no exposed route and ships no .conf"
+    fi
+    continue
+  fi
+  if [ ! -f "$conf" ]; then
+    ko "$nm — declares exposed routes but ships no .conf" "expected $conf"
+    continue
+  fi
+  present=$(grep -oE '^[[:space:]]*location[[:space:]]*=[[:space:]]*[^ {]+' "$conf" \
+            | sed -E 's/.*=[[:space:]]*//' | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+  extra=$(comm -13 <(printf '%s\n' "$exposed") <(printf '%s\n' "$present"))
+  [ -z "$missing" ] && ok "$conf — every declared-exposed route has a location" \
+                    || ko "$conf — declared exposed but absent" "$missing"
+  [ -z "$extra" ]   && ok "$conf — every location is a declared route" \
+                  || ko "$conf — exposes an undeclared route" "$extra"
+done
+
+# ---------------------------------------------------------------------------
+# Suite D — examples match the bank byte for byte.
+#
+# The examples are what people copy. Once an entry exists, the example's copy
+# is either identical to it or it is an unreviewed fork wearing a vetted name.
+# Only one documented normalization: the NNN_ prefix, which is deployment state
+# by design (see #32 §4), so it cannot be in the bank.
+# ---------------------------------------------------------------------------
+suite "examples match the bank byte for byte"
+# These come from stack/proxy/addons/ rather than from a provider bank entry,
+# and check-drift.sh already compares them against it.
+BANK_EXEMPT="000_policy.py 001_allowlist.py"
+for dir in examples/claude-code examples/dev-container/.devcontainer; do
+  for svc in proxy broker cred-gateway; do
+    for f in "$dir/$svc"/*; do
+      [ -f "$f" ] || continue
+      b=$(basename "$f")
+      if printf '%s\n' $BANK_EXEMPT | grep -qx "$b"; then
+        ok "$f — exempt, comes from stack/proxy/addons"
+        continue
+      fi
+      stripped=${b#[0-9][0-9][0-9]_}
+      nm=${stripped%.*}; ext=${stripped##*.}
+      cand="bank/$nm/$svc/$nm.$ext"
+      if [ ! -f "$cand" ]; then
+        ko "$f — no bank counterpart" "expected $cand; add an entry or add $b to BANK_EXEMPT"
+      elif cmp -s "$f" "$cand"; then
+        ok "$f — identical to $cand"
+      else
+        ko "$f — has drifted from $cand" "$(diff "$cand" "$f" | head -6)"
+      fi
+    done
+  done
 done
 
 finish

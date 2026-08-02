@@ -1,7 +1,7 @@
 #!/bin/bash
 # postCreateCommand — runs once when the container is first created.
 # Re-runnable (all steps are idempotent). If this fails mid-run,
-# fix the issue and re-run: /workspace/.devcontainer/dev/setup.sh
+# fix the issue and re-run: /workspace/.devcontainer/lab/setup.sh
 set -euo pipefail
 
 echo "[setup] trusting mitmproxy CA cert..."
@@ -18,11 +18,11 @@ gh config set --host github.com git_protocol https
 
 echo "[setup] verifying network isolation (broker must be unreachable)..."
 if curl -s --max-time 2 http://broker:8080/healthz > /dev/null 2>&1; then
-  echo "[setup] FAIL: broker is reachable from dev container — security boundary broken!"
+  echo "[setup] FAIL: broker is reachable from lab container — security boundary broken!"
   exit 1
 else
-  echo "[setup] OK: broker is not reachable from dev (expected)"
+  echo "[setup] OK: broker is not reachable from lab (expected)"
 fi
 
 # Run the per-start tasks (identity fetch, connectivity check) on first create too.
-/workspace/.devcontainer/dev/setup-start.sh
+/workspace/.devcontainer/lab/setup-start.sh

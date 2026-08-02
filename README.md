@@ -8,12 +8,14 @@ which injects credentials fetched from a broker the agent cannot reach directly.
 
 ```
 stack/          Core reusable infrastructure (broker, proxy, cred-gateway, observer,
-                log-rotator, base dev image)
+                log-rotator, base lab image)
 examples/
   dev-container/   VS Code dev container — open any repo in a secured workspace
   claude-code/     Claude Code in a secured container — attach and use interactively
 scripts/        check-drift.sh — does a deployment's bind-mounted files still
                 match the tag it is pinned at?
+                check-invariants.sh — are a deployment's own files safe on
+                their own terms? (custom providers have nothing to diff)
 tests/          Regression suite — integration (no credentials) and e2e (real ones)
 ```
 
@@ -28,8 +30,8 @@ this repo's GitHub URL, so you only need the example directory itself to get sta
 
 ```
 ┌─────────────────────────────────────────┐
-│  dev container (Claude Code, git, gh)   │
-│  HTTPS_PROXY=http://proxy:8080          │  network: dev
+│  lab container (Claude Code, git, gh)   │
+│  HTTPS_PROXY=http://proxy:8080          │  network: lab
 │  GIT_CREDENTIAL_URL=http://cred-gateway │
 │  No credentials, no .env, no API keys   │
 └────┬─────────────────────────┬──────────┘
@@ -43,7 +45,7 @@ this repo's GitHub URL, so you only need the example directory itself to get sta
 └──────┬───────┘   └──────────┬──────────┘
        │                      │
        │     network: secure  │
-       │     (no dev access)  │
+       │     (no lab access)  │
        ▼                      ▼
 ┌─────────────────────────────────────────┐
 │  broker                                 │
@@ -59,11 +61,17 @@ this repo's GitHub URL, so you only need the example directory itself to get sta
 
 Two Docker networks enforce the boundary:
 
-- `secure` — broker, proxy, cred-gateway. The dev container is **not** on this network.
-- `dev` — dev, proxy, cred-gateway.
+- `secure` — broker, proxy, cred-gateway. The lab container is **not** on this network.
+- `lab` — lab, proxy, cred-gateway. **`internal: true`**, so it has no default
+  gateway: the only route out of the lab is the proxy. That is what makes the
+  egress allowlist enforcing rather than advisory — without it `HTTP_PROXY` is
+  a request the agent can decline with `curl --noproxy '*'`.
 
-The broker is on `secure` only. Docker DNS will not resolve `broker` from the dev container,
-and there is no route even if it did. The only broker-adjacent surface reachable from dev is
+  `secure` is deliberately *not* internal; the broker calls provider APIs
+  directly through it. Set `LAB_INTERNAL=false` to opt out — see PLAYBOOK.md.
+
+The broker is on `secure` only. Docker DNS will not resolve `broker` from the lab container,
+and there is no route even if it did. The only broker-adjacent surface reachable from lab is
 the two paths nginx explicitly whitelists in `cred-gateway`.
 
 ### Why cred-gateway exists
@@ -74,7 +82,7 @@ flow from API calls. The proxy addon (`010_github.py`) deliberately does **not**
 the MITMed connection. So git credentials cannot go through the proxy injection path.
 
 Instead, git is configured with a credential helper: `curl http://cred-gateway/github/credential`.
-This is a direct HTTP call from the dev container (not proxied) that returns the token in
+This is a direct HTTP call from the lab container (not proxied) that returns the token in
 git's `username=x-access-token\npassword=<token>` format.
 
 cred-gateway (nginx) sits on both networks and acts as the narrow bridge. It denies everything
@@ -82,7 +90,7 @@ by default; whitelisted endpoints come from `*.conf` snippets bind-mounted at
 `/etc/nginx/gateway.d` (see `examples/*/cred-gateway/github.conf`), which expose only
 `/github/credential` and `/github/identity`, proxying those through to the broker on `secure`.
 Raw credential endpoints (`/anthropic/cred`, `/github/token`) have no snippet and return 403 —
-exposing them would let the dev container exfiltrate real secrets directly.
+exposing them would let the lab container exfiltrate real secrets directly.
 
 In short: the **proxy** handles API traffic via token injection; **cred-gateway** handles git's
 credential helper via a tightly scoped nginx whitelist.
@@ -92,7 +100,7 @@ credential helper via a tightly scoped nginx whitelist.
 broker, proxy, and cred-gateway each write a structured, secret-free JSONL trail — what got
 injected, blocked, or issued, never a credential value — to a shared `audit-logs` volume.
 `observer` tails it and serves a live view at `http://localhost:9000` (loopback-only: viewable
-from the host, not from `dev` or `secure`, so it cannot become a new channel between the two).
+from the host, not from `lab` or `secure`, so it cannot become a new channel between the two).
 `log-rotator` keeps the files bounded with `logrotate`.
 
 Available in `stack/compose.yaml` (see `stack/CLAUDE.md` for a smoke-test walkthrough that
@@ -126,7 +134,7 @@ Runs Claude Code inside the secure proxy stack with no credentials in the contai
 cd examples/claude-code
 cp .env.example .env   # fill in GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, ANTHROPIC_API_KEY
 docker compose up --build -d
-docker compose logs -f dev   # watch setup complete
+docker compose logs -f lab   # watch setup complete
 ```
 
 See [`examples/claude-code/README.md`](examples/claude-code/README.md) for full setup.
@@ -142,7 +150,7 @@ examples/claude-code/
   broker/        *.js    → /app/providers
   proxy/         *.py    → /addons
   cred-gateway/  *.conf  → /etc/nginx/gateway.d
-  dev/           Dockerfile + setup scripts
+  lab/           Dockerfile + setup scripts
   compose.yaml
 ```
 
@@ -151,11 +159,11 @@ examples/claude-code/
 2. Add a numbered addon in `proxy/` following `020_anthropic.py` or
    `030_cloudflare.py`. Restart the proxy — `entrypoint.sh` auto-discovers `*.py` files at
    startup.
-3. Only if a dev-side tool must hold the credential locally, add a `cred-gateway/` snippet
+3. Only if a lab-side tool must hold the credential locally, add a `cred-gateway/` snippet
    exposing it. If the credential is only ever spent on an outbound API call, skip this
    — that is the difference between the agent never seeing a secret and it holding one.
 4. Add a smoke-test assertion verifying injection works and the broker endpoint is unreachable
-   from the dev container, plus coverage in `tests/` — at minimum a spoofed-`Host` case.
+   from the lab container, plus coverage in `tests/` — at minimum a spoofed-`Host` case.
 
 ### Proxy allowlist
 
@@ -234,7 +242,7 @@ docker compose up -d --force-recreate proxy
   the API but cannot enumerate or manage org resources.
 - The broker never routes through the proxy. It makes direct HTTPS calls to `api.github.com`
   and `api.cloudflare.com`. Routing through the proxy would be circular.
-- `observer` and `log-rotator` have no `secure`/`dev` network membership — they reach the
+- `observer` and `log-rotator` have no `secure`/`lab` network membership — they reach the
   `audit-logs` volume without joining either, so the audit trail cannot become a new channel
   between the two.
 

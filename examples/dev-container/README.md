@@ -79,17 +79,17 @@ docker compose -f .devcontainer/compose.yaml up -d
 # Then: Dev Containers: Rebuild Container in VS Code
 ```
 
-**Recovery if setup failed mid-run** (idempotent, run inside the dev container):
+**Recovery if setup failed mid-run** (idempotent, run inside the lab container):
 ```bash
-/workspace/.devcontainer/dev/setup.sh
+/workspace/.devcontainer/lab/setup.sh
 ```
 
 ## Testing the security boundary
 
-Run these from inside the dev container (`docker compose -f .devcontainer/compose.yaml exec dev bash`):
+Run these from inside the lab container (`docker compose -f .devcontainer/compose.yaml exec lab bash`):
 
 ```bash
-# 1. Broker must be unreachable directly from dev
+# 1. Broker must be unreachable directly from lab
 curl -s --max-time 2 http://broker:8080/healthz
 # → curl: (6) Could not resolve host  OR  (28) Connection timed out
 

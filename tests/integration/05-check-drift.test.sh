@@ -126,7 +126,43 @@ cp "$REPO_ROOT"/examples/dev-container/.devcontainer/cred-gateway/*.conf "$d/cre
 cp "$TMPD/clean/compose.yaml" "$d/compose.yaml"
 out=$(run "$d" --example examples/dev-container)
 check_contains "exits 0" "$out" "EXIT=0"
-check_contains "resolves .devcontainer/" "$out" "matches dev-container/proxy/"
+# The .devcontainer/ layout still has to resolve — example_path() dies if it
+# cannot find one — but it is no longer observable through a file comparison.
+# Every provider file in this fixture now resolves through the bank, which
+# wins ahead of the example fallback on purpose (#32 §7). The source line is
+# what proves .devcontainer/ was found.
+check_contains "resolves .devcontainer/" "$out" "examples/dev-container (recorded)"
+check_contains "prefers the bank over the example" "$out" "matches bank/github/proxy/"
+
+suite "the example fallback still catches what the bank does not cover"
+# A file with no bank counterpart and no stack counterpart is the deployment's
+# own. Proves the chain falls through rather than mis-resolving by name.
+cp "$d/proxy/010_github.py" "$d/proxy/040_acme.py"
+out=$(run "$d" --example examples/dev-container)
+check_contains "unmatched file reads as custom" "$out" "040_acme.py"
+check_contains "and is named as owned" "$out" "no upstream counterpart"
+rm -f "$d/proxy/040_acme.py"
+
+suite "drift also asks the invariant question"
+# #26: a clean drift run used to read as a pass while custom files leaked.
+# check-drift now invokes check-invariants.sh, so a deployment with zero drift
+# and a leaking custom addon fails.
+d=$(mkdep withleak)
+cat > "$d/proxy/090_leaky.py" <<'ADDON'
+import audit
+def request(flow):
+    audit.log_event("cred_injected", provider="x", path=flow.request.path)
+ADDON
+out=$(run "$d")
+check_contains "no drift is reported" "$out" "0 drift"
+check_contains "the custom file is still named custom" "$out" "custom  090_leaky.py"
+check_contains "but the leak is reported too" "$out" "logs a raw request path"
+check_contains "and the run fails" "$out" "EXIT=1"
+
+suite "the invariant scan can be skipped without disabling drift"
+out=$(SKIP_INVARIANTS=1 run "$d")
+check_contains "exits 0 with only the leak suppressed" "$out" "EXIT=0"
+check_not_contains "no invariant findings printed" "$out" "logs a raw request path"
 
 suite "refuses a directory that is not a deployment"
 mkdir -p "$TMPD/empty"

@@ -1,6 +1,6 @@
 # Integration tier
 
-Guards the security boundaries this repo exists to enforce: the dev container
+Guards the security boundaries this repo exists to enforce: the lab container
 must never obtain a raw credential, and the proxy must never spend one on a
 destination the operator did not intend.
 
@@ -32,6 +32,7 @@ the tier that uses real ones.
 |---|---|---|
 | `00-config-lint` | no | Static invariants: exact-match locations only, no raw-credential endpoint in any snippet, dummy `proxy-injected` values intact, no committed key material, `010_github.py` still not matching `github.com`, `000_policy.py` first in load order |
 | `05-check-drift` | no | `scripts/check-drift.sh` against synthetic deployments: an edited addon is drift, a vendored `001_allowlist.py` resolves to `stack/proxy/addons/` rather than reading as ownerless, an unvendored `000_policy.py` is a missing control, a genuinely custom addon is owned but not a failure, non-tag build refs and stale `Reconciled:` tags are surfaced |
+| `06-check-invariants` | no | `scripts/check-invariants.sh` against synthetic deployments: the two leaks from the incident report that opened #26, one planted violation per fail-severity check, the `000_policy.py` pretty_host exemption not leaking to other files, note-severity findings not failing the run, and structural assertions that the lint and the scanner share one implementation |
 | `10-cred-gateway` | yes | Whitelist behaviour: allowed paths reach the broker, denied paths 403, path-normalisation probes (`..`, `%2f`, case, trailing slash), rate limiting, multi-snippet composition, snippets read-only in-container, and that a prefix-match snippet really does leak `/github/token` |
 | `20-proxy-policy` | yes | `000_policy.py` blocks `broker` and `cred-gateway` across methods and paths, and cannot be bypassed with a spoofed `Host` header |
 | `25-proxy-injection` | yes | `010_github` / `020_anthropic` / `030_cloudflare` inject only for the genuine vendor host; a spoofed `Host` cannot redirect a credential to another server; Anthropic Admin API stays blocked |
