@@ -8,6 +8,135 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.5.0 — 2026-08-02
+
+The release that stops trusting the operator, in the same way the design
+already refuses to trust the agent.
+
+### Changed
+
+**The `dev` service, network and directory are now `lab`.** "dev" implied a
+developer sits in the container. Nobody does — it is where an autonomous agent
+runs unattended, and the name was steering how the documentation described the
+boundary. `stack/dev/` → `stack/lab/`, each example's `dev/` → `lab/`, the
+compose service and network, and prose throughout.
+
+Not renamed, because they name someone else's thing: `.devcontainer/`,
+`devcontainer.json`, the `examples/dev-container/` directory, and "Dev
+Containers" the VS Code feature.
+
+**The `lab` network is `internal: true` by default, so the proxy can no longer
+be bypassed.** The egress allowlist has been advisory since it shipped: nothing
+forced traffic through the proxy, so `curl --noproxy '*'` left the container
+without touching any addon. `HTTP_PROXY` is a request, not a routing
+constraint. Removing the network's default gateway makes the proxy the only
+route out, and the allowlist enforcing.
+
+Verified on a running stack rather than argued:
+
+| | `internal: true` | `LAB_INTERNAL=false` |
+|---|---|---|
+| lab → internet direct (`--noproxy '*'`) | blocked | 200 |
+| lab → internet via the proxy (`CONNECT`) | 200 | 200 |
+| lab → broker | unreachable | unreachable |
+| broker → `api.github.com` (on `secure`) | 200 | 200 |
+
+Proxied traffic is unaffected because the **proxy** resolves the hostname, not
+the client. `secure` is deliberately not internal — the broker calls provider
+APIs directly through it.
+
+`LAB_INTERNAL=false` opts out, for tooling that cannot use an HTTP proxy at all
+(raw sockets, `ssh`, anything resolving before it proxies). The symptom of
+needing it is a DNS failure inside the lab, not a proxy error. Opting out costs
+egress mediation and nothing else: the broker stays unreachable either way,
+because that is `secure` network isolation and this flag does not touch it. It
+is never silent — `check-invariants.sh` reports the opt-out on every run.
+
+### Added
+
+**`bank/` — vetted provider implementations, installed as data.** Every
+security incident this project has had came from someone writing a provider
+file, and two of them shipped in `PLAYBOOK.md` as the *recommended* pattern.
+Making the safe version the thing you install rather than the thing you are
+told to write is a different kind of control from documenting it better.
+
+An entry is `provider.json` plus the files it implies, and is complete enough
+that holding only `bank/<name>/` and a running stack is enough to install it.
+`github`, `anthropic` and `cloudflare` ship as entries; their manifests were
+derived from what each provider actually reads, not from the playbook's
+description of it.
+
+Three things the bank *deleted*, which is the better measure of it: the
+hardcoded raw-credential path list in the lint (now derived from the
+manifests), the hardcoded `AUDIT_MIN` constant (now the highest `min_stack`
+among the entries an example vendors), and the per-provider prose in
+`PLAYBOOK.md` that duplicated manifest data.
+
+`check-drift.sh` now resolves `NNN_<name>.<ext>` to its bank entry by name,
+before falling back to guessing which example a deployment started from. That
+guess degrades on a deployment carrying many custom files; a bank file resolves
+the same regardless of what sits beside it.
+
+**`scripts/check-invariants.sh` — is your own code safe, not just current?**
+`check-drift.sh` answers one question: does your copy match ours. For a file
+you wrote there is no ours, so it answers `custom` and diffs nothing. A
+deployment maintainer reconciled everything it reported, got a clean run, and
+had two of their own addons writing secrets into the audit trail throughout.
+
+The checks now live in `scripts/lib/invariants.sh`, shared between the upstream
+lint and this scanner so the two cannot drift. The scanner needs no upstream,
+no pin, no provenance stub, no network and no git. `check-drift.sh` invokes it,
+so neither question can be asked without the other; `SKIP_INVARIANTS=1` opts
+out.
+
+A findings-free scan is deliberately **not** reported as a pass. These are
+greps against a known list, and a provider can be unsafe in ways none of them
+anticipate.
+
+**The audit trail is scanned for tainted credentials at runtime.** The static
+checks find the two ways we know of to write a secret into the trail; they have
+no theory of what is sensitive. `35-audit-leak.test.sh` taints every channel a
+secret can arrive on, drives real traffic through all four shipped addons, and
+scans the trail for the taints — so it does not need to know how a leak would
+be spelled.
+
+### Upgrading
+
+Two of these need action. Both are one-time.
+
+**1. The rename.** Renaming a compose service and network means an existing
+deployment keeps an orphaned `dev` container and network unless it is brought
+down first:
+
+```bash
+docker compose down          # before pulling the new compose
+docker compose up -d
+```
+
+If you copied `devcontainer.json`, its `"service": "dev"` is now stale — change
+it to `"lab"`. Nothing pinned breaks: both examples build their lab image from
+their own `./lab`, and old tags keep resolving.
+
+**2. Unmediated egress is now reported.** A deployment whose `lab` network has
+no `internal:` key — which is every deployment predating this release — will
+start seeing a finding on each `check-drift.sh` run:
+
+```
+FAIL   lab network has no `internal:` key — egress is unmediated
+```
+
+That is the intended behaviour, not a false positive: the control was absent
+before and nothing said so. Add `internal: ${LAB_INTERNAL:-true}` to the `lab`
+network to fix it, and expect anything in the lab that cannot use an HTTP proxy
+to stop working — that is the control taking effect. `LAB_INTERNAL=false` keeps
+the old behaviour and keeps the finding.
+
+Nothing forces you to adopt `bank/`. Existing hand-maintained provider files
+keep working; `check-drift.sh` resolves them against the bank when the names
+match and falls back to the example when they do not.
+
+---
+
 ## 1.4.3 — 2026-07-30
 
 ### Fixed
