@@ -112,10 +112,24 @@ services:
     restart: unless-stopped
 
 networks:
+  # secure is NOT internal: broker calls api.github.com and api.cloudflare.com
+  # directly, and the proxy reaches every provider through it.
   secure:
     driver: bridge
+  # lab IS internal by default: no default gateway, so the only way out is a
+  # container on this network — the proxy. That is what makes 001_allowlist.py
+  # enforcing rather than advisory; without it, HTTP_PROXY is a request the
+  # agent can decline with `curl --noproxy '*'`.
+  #
+  # Set LAB_INTERNAL=false to opt out. It costs you the boundary: egress
+  # becomes unmediated and check-invariants.sh will say so on every run.
+  # The reason to do it is tooling that cannot use an HTTP proxy at all —
+  # raw sockets, ssh, anything that resolves before proxying. Proxied HTTP
+  # and HTTPS are unaffected either way, because the proxy resolves the
+  # hostname, not the client.
   lab:
     driver: bridge
+    internal: ${LAB_INTERNAL:-true}
 
 volumes:
   proxy-certs:

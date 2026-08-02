@@ -28,7 +28,10 @@ broker, proxy, and cred-gateway each write a structured JSONL audit trail (what 
 **Two Docker networks enforce the security boundary:**
 
 - `secure`: broker + proxy + cred-gateway. Dev container is **not** on this network.
-- `lab`: lab + proxy + cred-gateway.
+- `lab`: lab + proxy + cred-gateway. **`internal: ${LAB_INTERNAL:-true}`** — no
+  default gateway, so the proxy is the only way out and the allowlist is
+  enforcing rather than advisory. `secure` is *not* internal: the broker needs
+  direct egress to provider APIs.
 
 The broker is on `secure` only. Docker DNS will not resolve `broker` from within the lab container, and there is no route even if it did. The only broker-adjacent surface reachable from lab is the two nginx-whitelisted paths on cred-gateway.
 

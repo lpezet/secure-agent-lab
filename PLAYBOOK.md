@@ -132,6 +132,22 @@ Produce:
 - If `observer`/`log-rotator` are requested: no `networks:` entry for
   either — see the constraints below for why that's correct, not an
   omission.
+**Egress is mediated by default.** The `lab` network ships `internal: true`, so
+it has no default gateway and the proxy is the only route out. Without that,
+`HTTP_PROXY` is only a request — `curl --noproxy '*'` leaves the container
+untouched by any addon.
+
+Opt out with `LAB_INTERNAL=false` when the lab needs tooling that cannot use an
+HTTP proxy: raw sockets, `ssh`, anything resolving before it proxies. Proxied
+HTTP and HTTPS are unaffected either way, because the **proxy** resolves the
+hostname, not the client — so the symptom of a tool that needs the opt-out is
+DNS failure inside the lab, not a proxy error.
+
+Opting out costs egress mediation and nothing else: the broker stays unreachable
+from the lab regardless, because that is `secure` network isolation, which this
+flag does not touch. `scripts/check-invariants.sh` reports the opt-out as a
+finding on every run, by design — a disabled control should not be silent.
+
 - If egress filtering is requested (opt-in, off by default): copy
   `stack/proxy/addons/001_allowlist.py` in alongside `000_policy.py`, and
   mount the allowlist data file from a directory *other* than `proxy/` —

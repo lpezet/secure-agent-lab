@@ -205,6 +205,46 @@ inv_env_value_credential() {
     | grep -v '_PATH' | grep -v "$_INV_BT")"
 }
 
+# The lab network must have no default gateway. Without that, HTTP_PROXY is a
+# request the agent can decline — `curl --noproxy '*'` leaves the box without
+# touching the proxy, so the egress allowlist governs cooperating traffic only.
+#
+# Reports the *absence* of the control, so it fires on a compose file that never
+# had the key as well as on one that opted out. A deployment predating this is
+# the common case and is exactly what should be told.
+inv_egress_unmediated() {
+  local f="$1" block line
+  # Only the lab network. `secure` is deliberately not internal: broker calls
+  # provider APIs directly through it.
+  #
+  # Scoped to the top-level `networks:` section. A service is commonly named
+  # `lab` too, and an earlier cut of this matched that block instead — it only
+  # looked correct because the real network block further down supplied the
+  # key it was looking for.
+  block=$(awk '
+    /^networks:[[:space:]]*$/ { innet = 1; next }
+    /^[^[:space:]#]/          { innet = 0 }
+    innet && /^[[:space:]]+lab:[[:space:]]*$/ { inlab = 1; print NR ": " $0; next }
+    innet && inlab && /^[[:space:]]{1,2}[a-zA-Z_-]+:/ { inlab = 0 }
+    innet && inlab { print NR ": " $0 }
+  ' "$f" 2>/dev/null)
+  [ -n "$block" ] || return 0            # no lab network declared here at all
+
+  line=$(printf '%s\n' "$block" | grep 'internal:' || true)
+  if [ -z "$line" ]; then
+    printf '%s: lab network has no `internal:` key — egress is unmediated\n' \
+      "$(printf '%s' "$block" | head -1 | cut -d: -f1)"
+    return 1
+  fi
+  # An unresolved ${LAB_INTERNAL:-true} is the shipped default and is fine.
+  case "$line" in
+    *'internal: false'*|*'internal: "false"'*|*':-false}'*)
+      printf '%s\n' "${line%%:*}: lab network is not internal — egress is unmediated"
+      return 1 ;;
+  esac
+  return 0
+}
+
 # --------------------------------------------------------------- checks: any
 
 # A credential-shaped literal anywhere in a deployment file. The lint sweeps the
@@ -251,7 +291,8 @@ raw_cred_endpoint|fail|gateway_conf|exposes a raw-credential broker route to the
 real_credential|fail|compose|env var holds something other than the inert placeholder
 env_value_credential|note|broker_js|credential read from an env value rather than a *_PATH file
 observer_port|note|compose|observer port is not bound to loopback
-credential_material|fail|proxy_py broker_js gateway_conf compose|credential-shaped string in a deployment file'
+credential_material|fail|proxy_py broker_js gateway_conf compose|credential-shaped string in a deployment file
+egress_unmediated|fail|compose|lab network is not internal, so the proxy can be bypassed'
 
 # inv_field <name> <1=severity|2=applies|3=description>
 inv_field() {
