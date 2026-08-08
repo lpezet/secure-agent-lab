@@ -8,6 +8,96 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.6.0 — 2026-08-08
+
+Two halves of the same subject: who decides how much authority the agent gets,
+and whether you can see how much it got.
+
+### Fixed
+
+**The lab container chose which Cloudflare profile was issued to it.**
+`X-Cf-Profile` named the profile the addon then asked the broker to mint. That
+was harmless while one profile shipped, and decorative the moment a deployment
+added a second at a different privilege level — which is the entire reason
+profiles exist. A prompt-injected agent asks for `prod-ir`, gets it, and the
+audit line records the escalation as though it had been authorised.
+
+The profile is now deployment configuration: `CLOUDFLARE_PROFILE`, read once at
+load from the proxy's own environment. The header is still stripped so it never
+reaches the vendor, but its value is discarded rather than read. The broker is
+configured with the same value and 403s any other profile — that half still
+holds if a future addon goes back to trusting the header, and it refuses
+*before* the outbound mint.
+
+Scoped honestly: **no credential ever leaked, and no deployment shipping only
+`workers-deploy` could escalate anything** — there was one rung on the ladder.
+What was broken is a property the design depends on, that the untrusted side
+does not author its own authority, and it would have become exploitable in the
+deployment that first added a second profile.
+
+The general rule now has a check behind it. `header_selector` fails any addon
+that binds a client-supplied request header to a name it acts on. Stripping is
+not reading: a bare `pop()`/`del` is the correct way to drop a client header and
+stays clean. Same family as `pretty_host` — both catch a security decision made
+from data the lab container writes.
+
+### Added
+
+**GitHub audit lines say what the token can do, not just that one was issued.**
+The broker mints installation tokens at whatever scope the App's installation
+grants, and that grant is configured in GitHub's web UI, outside this stack. So
+the stack inherited a ceiling it never participated in setting and then never
+mentioned it again: "what can this lab currently do to GitHub?" was a question
+you answered by opening GitHub settings, not by reading the trail.
+
+`token_issued` and `credential_issued` now carry `permissions` and
+`repository_selection`. Both routes — `git push` travels the credential route,
+and leaving it out would have made the most-used path the least visible.
+
+Repository *names* stay out. `observer` serves the trail over HTTP, and the
+`all`/`selected` enum already answers whether the installation is org-wide.
+
+**Reports the ceiling, does not lower it.** Narrowing what gets minted is a
+different piece of work: it needs a per-scope cache and a config surface, and it
+breaks `git push` if scoped wrong.
+
+Failure degrades the trail, not the token. An unreachable installation endpoint
+sets the field to `unknown` and the mint proceeds — describing a credential must
+never be what stops it being issued.
+
+**`observer` renders structured audit fields as JSON.** The dashboard built
+cells as `` `${k}=${v}` ``, and `permissions` is the first nested object to
+reach the trail, so it would have printed `[object Object]`. Still rendered as
+text via `textContent`, never as markup.
+
+### Upgrading
+
+Nothing is required, and no manual step is needed to stay safe.
+
+**`CLOUDFLARE_PROFILE` defaults to `workers-deploy`** on both the proxy addon
+and the broker provider, which is what every existing deployment already
+issues. Set it explicitly on **both** services if you want a different profile —
+a mismatch between the two fails closed with a 403 rather than silently picking
+one.
+
+**The new invariant may report a deployment's own addons.** Any hand-written
+addon that reads a request header into a variable will start showing a finding
+on each `check-invariants.sh` / `check-drift.sh` run:
+
+```
+FAIL   binds a client-supplied request header to a name the addon acts on
+```
+
+If the addon acts on that value, that is the bug this release fixed, in your
+copy. If it only strips the header, rewrite it as a bare `pop()`/`del`.
+
+**The `observer` fix is an image change**, unlike the provider files beside it.
+A deployment pinned below this release keeps rendering `permissions` as
+`[object Object]` until it repins. Cosmetic — the field is in the trail either
+way.
+
+---
+
 ## 1.5.0 — 2026-08-02
 
 The release that stops trusting the operator, in the same way the design
