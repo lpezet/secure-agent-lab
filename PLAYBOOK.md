@@ -201,6 +201,30 @@ being generated:
   deployments, which is honest — they are genuinely separate blast radii.
   This is the general form of the `pretty_host` rule above, and
   `scripts/check-invariants.sh` enforces it (`header_selector`).
+- **Use `hostmatch` for host matching, and wildcard only a single-tenant
+  suffix.** `import hostmatch` (baked into the image at `/opt/agent-proxy`,
+  like `audit`) and call `hostmatch.matches(flow.request.host, [...])` rather
+  than writing `endswith` or `in` by hand. `"api.example.com" in host` is true
+  for `api.example.com.evil.test`; a bare `host.endswith("example.com")` is
+  true for `evilexample.com`. `hostmatch` matches on label boundaries, so
+  `*.example.com` covers `a.example.com` but not the `example.com` apex and
+  not `evilexample.com`.
+
+  A wildcard entry is safe **only when one party holds every name under the
+  suffix**, because a credential injected for `*.suffix` goes to whoever owns
+  the name it was aimed at. `*.googleapis.com` qualifies. These do not, and a
+  wildcard for any of them is a direct handover to whoever registered a
+  subdomain: `*.workers.dev`, `*.pages.dev`, `*.myshopify.com`,
+  `*.herokuapp.com`, `*.vercel.app`, `*.netlify.app`, `*.s3.amazonaws.com`,
+  `*.blob.core.windows.net`, `*.github.io`.
+
+  Note the asymmetry with the egress allowlist, which also matches hosts: a
+  too-wide allowlist entry means the agent can *reach* something it should
+  not, while a too-wide injection match means a live token is *handed* to it.
+  `check-invariants.sh` fails on the listed suffixes
+  (`injection_wildcard_multitenant`) and notes on every other wildcard
+  (`injection_wildcard`) — the list will never be complete, and the note is
+  what covers the suffixes nobody thought of.
 - `cred-gateway` snippets must use exact-match `location = /path` blocks,
   never a prefix match — a prefix like `location /github/` exposes sibling
   routes that must stay broker-only.
@@ -478,7 +502,11 @@ agent's own credential to the provider, which is the opposite of the
 point. Cache with a short TTL. Pick it
 up with `docker compose up -d --force-recreate proxy` — `entrypoint.sh`
 auto-discovers `*.py` at startup. Use the baked-in `audit.py`
-(`import audit; audit.log_event(...)`) the same way.
+(`import audit; audit.log_event(...)`) and `hostmatch.py`
+(`import hostmatch; hostmatch.matches(flow.request.host, [...])`) the same
+way — both are on `PYTHONPATH` regardless of load order. If the provider's
+hosts are a family rather than a fixed pair, read the wildcard rule in the
+generation constraints before reaching for `*.`.
 
 **Cred-gateway** — only if lab tooling needs raw access to something the
 broker/proxy path doesn't cover (rare). Add an exact-match snippet to the
@@ -588,7 +616,7 @@ paperwork.
 
    Note what this is *not*: the proxy image does not ship these addons and
    the mount does not shadow them. `stack/proxy/Dockerfile` bakes in only
-   `entrypoint.sh` and `audit.py`; `/addons` exists solely because the
+   `entrypoint.sh`, `audit.py` and `hostmatch.py`; `/addons` exists solely because the
    deployment mounts it, and `entrypoint.sh` loads whatever `*.py` it finds
    there. So a policy addon that was never vendored isn't a stale copy
    hiding under a mount — it is a control that does not exist, with a

@@ -7,7 +7,10 @@ starting with # and blank lines are ignored.
 Entry format:
   domain [METHODS]
 
-  domain       Exact hostname or wildcard (*.example.com matches all subdomains).
+  domain       Exact hostname, or a wildcard. Matching is hostmatch.find():
+               *.example.com covers a.example.com and a.b.example.com, but not
+               example.com itself and not evilexample.com. An entry that is
+               neither — `*`, `a.*.com` — is ignored with a warning at startup.
   METHODS      Optional comma-separated HTTP methods to permit for this domain.
                Omitting METHODS defaults to GET,HEAD,OPTIONS (safe reads only).
                Use * to explicitly allow all methods.
@@ -29,19 +32,21 @@ Internal host blocking (broker, cred-gateway) is handled by policy.py, which
 runs before this addon.
 """
 import os
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Optional, Set
 
 from mitmproxy import ctx, http
 
 import audit
+import hostmatch
 
 _ALLOWLIST_PATH = "/etc/agent-allowlist"
 _DEFAULT_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 # None means permissive mode (no file found).
-# When active, maps domain → allowed methods (None = all methods).
-_exact: Optional[Dict[str, Optional[Set[str]]]] = None
-_wildcards: List[Tuple[str, Optional[Set[str]]]] = []  # (suffix, methods)
+# When active, maps entry → allowed methods (None = all methods). Exact and
+# wildcard entries live in one dict because hostmatch.find() tells them apart
+# and hands back the entry that matched, which is the key to this dict.
+_entries: Optional[Dict[str, Optional[Set[str]]]] = None
 
 
 def _parse_methods(token: str) -> Optional[Set[str]]:
@@ -52,17 +57,15 @@ def _parse_methods(token: str) -> Optional[Set[str]]:
 
 
 def _load() -> None:
-    global _exact, _wildcards
+    global _entries
     if not os.path.isfile(_ALLOWLIST_PATH):
         ctx.log.warn(
             f"allowlist: {_ALLOWLIST_PATH} not found or is not a file — "
             "all destinations permitted (permissive mode)"
         )
-        _exact = None
-        _wildcards = []
+        _entries = None
         return
-    exact: Dict[str, Optional[Set[str]]] = {}
-    wildcards: List[Tuple[str, Optional[Set[str]]]] = []
+    entries: Dict[str, Optional[Set[str]]] = {}
     with open(_ALLOWLIST_PATH) as fh:
         for line in fh:
             # Strip trailing comments before parsing. Without this,
@@ -75,37 +78,31 @@ def _load() -> None:
             parts = line.lower().split(None, 1)
             domain = parts[0]
             methods = _parse_methods(parts[1]) if len(parts) > 1 else set(_DEFAULT_METHODS)
-            if domain.startswith("*."):
-                wildcards.append((domain[1:], methods))  # store as ".example.com"
-            else:
-                exact[domain] = methods
-    ctx.log.info(
-        f"allowlist: loaded {len(exact)} exact + {len(wildcards)} wildcard entries"
-    )
-    _exact = exact
-    _wildcards = wildcards
+            entries[domain] = methods
+
+    # An entry hostmatch cannot interpret — `*`, `*.`, `a.*.com` — matches
+    # nothing, which denies rather than permits. Safe, but silence is a poor
+    # way to learn about a typo, so say which lines are inert.
+    skipped = hostmatch.invalid(entries)
+    for bad in skipped:
+        ctx.log.warn(f"allowlist: ignoring uninterpretable entry {bad!r} — it will match nothing")
+    ignored = f" ({len(skipped)} ignored)" if skipped else ""
+    ctx.log.info(f"allowlist: loaded {len(entries) - len(skipped)} entries{ignored}")
+    _entries = entries
 
 
 def _is_allowed(host: str, method: str) -> bool:
+    # One matcher, shared with every credential-injecting addon, rather than a
+    # second implementation of suffix matching living privately in this file.
+    # hostmatch.find returns the entry that matched so the per-entry method set
+    # below can be looked up; matches() would only say that something did.
+    entry = hostmatch.find(host, _entries)
+    if entry is None:
+        return False
     # CONNECT establishes the HTTPS tunnel; the real method is on the inner request.
     if method == "CONNECT":
-        if host in _exact:
-            return True
-        return any(host.endswith(w) for w, _ in _wildcards)
-
-    methods: Optional[Set[str]] = None  # sentinel: not found
-    found = False
-    if host in _exact:
-        methods = _exact[host]
-        found = True
-    else:
-        for suffix, m in _wildcards:
-            if host.endswith(suffix):
-                methods = m
-                found = True
-                break
-    if not found:
-        return False
+        return True
+    methods = _entries[entry]
     return methods is None or method.upper() in methods
 
 
@@ -114,12 +111,16 @@ def running() -> None:
 
 
 def request(flow: http.HTTPFlow) -> None:
-    if _exact is None:
+    if _entries is None:
         return
     # flow.request.host is the real destination. Do NOT use pretty_host here:
     # it prefers the client-supplied Host header, so the lab container could
     # point a request at its own server, spoof the header, and have the real
     # credential injected into a request that never goes to the vendor.
+    #
+    # hostmatch takes a host string and cannot tell where it came from, so
+    # passing pretty_host would reintroduce that bug through a helper that
+    # looks like it is handling the problem. It is not; this line is.
     host = flow.request.host.lower()
     method = flow.request.method
     if not _is_allowed(host, method):

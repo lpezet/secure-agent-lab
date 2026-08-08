@@ -131,6 +131,82 @@ out=$(run "$d")
 check_contains "dropping a client header stays clean" "$out" "0 fail"
 check_contains "and exits 0" "$out" "EXIT=0"
 
+suite "a wildcard an addon injects for is a note; a multi-tenant one is a failure"
+# The rule from #39: a wildcard is safe for credential injection only when the
+# entire suffix is single-tenant. Google holds every name under googleapis.com;
+# anyone can register a workers.dev subdomain, so injecting for that suffix
+# hands a live token to whoever did.
+#
+# Both halves are load-bearing. Failing on every wildcard would block the GCP
+# addon #41 ships and teach authors to route around the check; noting on the
+# multi-tenant ones would let a real handover through as advice.
+d=$(mkdep wildcard-multitenant)
+cat > "$d/proxy/080_deploy.py" <<'PY'
+import audit
+import hostmatch
+def request(flow):
+    if not hostmatch.matches(flow.request.host, ["*.workers.dev"]):
+        return
+    flow.request.headers["Authorization"] = "Bearer " + _token()
+PY
+out=$(run "$d")
+check_contains "exits 1" "$out" "EXIT=1"
+check_contains "names the pattern" "$out" "wildcard suffix anyone can register under"
+check_contains "quotes the offending line" "$out" "*.workers.dev"
+
+d=$(mkdep wildcard-singletenant)
+cat > "$d/proxy/080_gcp.py" <<'PY'
+import audit
+import hostmatch
+def request(flow):
+    if not hostmatch.matches(flow.request.host, ["*.googleapis.com"]):
+        return
+    flow.request.headers["Authorization"] = "Bearer " + _token()
+PY
+out=$(run "$d")
+check_contains "a single-tenant suffix does not fail the run" "$out" "EXIT=0"
+check_contains "but is still noted" "$out" "is the whole suffix single-tenant?"
+check_contains "and quotes the line" "$out" "*.googleapis.com"
+# One finding per line, not two. The note check excludes the multi-tenant list
+# and the fail check is exactly that list, so the halves cannot both fire.
+check_contains "the multi-tenant half stays silent" "$out" "0 fail"
+
+suite "a wildcard in an addon that attaches no credential is not this check's business"
+# 001_allowlist.py answers "may the lab reach this host", not "should a
+# credential be attached". A deployment writing its own egress rules must not
+# be told off for the entries that addon exists to hold.
+d=$(mkdep wildcard-noinject)
+cat > "$d/proxy/080_filter.py" <<'PY'
+import audit
+import hostmatch
+BLOCKED = ["*.workers.dev", "*.pages.dev"]
+def request(flow):
+    if hostmatch.matches(flow.request.host, BLOCKED):
+        flow.response = None
+PY
+out=$(run "$d")
+check_contains "no finding at all" "$out" "0 fail"
+check_contains "not even a note" "$out" "0 note"
+check_contains "and exits 0" "$out" "EXIT=0"
+
+suite "an addon documenting the anti-pattern is not reporting it"
+# Every addon in this repo explains in prose the thing it must not do, so a
+# docstring quoting `["*.workers.dev"]` is the common case rather than the
+# exotic one. The same-line docstring strip has to survive the quote
+# characters inside it, or the house style becomes a source of false failures.
+d=$(mkdep wildcard-docstring)
+cat > "$d/proxy/080_documented.py" <<'PY'
+"""Never inject for ["*.workers.dev"] — anyone can register one."""
+import audit
+def request(flow):
+    if flow.request.host != "api.example.com":
+        return
+    flow.request.headers["Authorization"] = "Bearer " + _token()
+PY
+out=$(run "$d")
+check_contains "prose is not code" "$out" "0 fail"
+check_contains "and not a note either" "$out" "0 note"
+
 suite "000_policy.py is exempt from the pretty_host check, and only it"
 # It ORs pretty_host with the real host to widen a block, which is safe. The
 # exemption is positional, so it must not leak to any other file.
@@ -207,7 +283,7 @@ check_contains "the lint sources the library" "$(cat "$lint")" 'scripts/lib/inva
 check_contains "the scanner sources the library" "$(cat "$INV_SH")" 'lib/invariants.sh'
 for fn in inv_pretty_host inv_raw_path_logged inv_raw_path_split inv_github_com_matched \
           inv_exception_quoted inv_location_prefix inv_raw_cred_endpoint inv_real_credential \
-          inv_header_selector; do
+          inv_header_selector inv_injection_wildcard_multitenant; do
   check_contains "lint calls $fn" "$(cat "$lint")" "$fn"
 done
 # The patterns themselves must exist in exactly one place. Prose is fine and
