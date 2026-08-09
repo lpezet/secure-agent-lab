@@ -168,10 +168,15 @@ async function mintAccessToken() {
     err.code = "human_principal";
     throw err;
   }
-  // external_account is federation from an outside IdP. Deliberately not
-  // implemented rather than half-implemented: it cannot be exercised without
-  // an IdP to federate from, and shipping unverified credential code is worse
-  // than shipping a clear refusal.
+  // external_account is Workload Identity Federation — an identity from an
+  // outside IdP exchanged for a Google token. Deliberately not implemented
+  // rather than half-implemented: it cannot be exercised without a real IdP to
+  // federate from, which would make it the only credential path here taken on
+  // faith. Tracked as #52.
+  //
+  // Not to be confused with the inert external_account the LAB carries: that
+  // one's credential source prints `proxy-injected` and its exchange never
+  // leaves the proxy. Same shape, opposite side of the boundary.
   if (adc.type !== "impersonated_service_account" && adc.type !== "service_account") {
     const err = new Error(`unsupported ADC type: ${adc.type}`);
     err.code = "unsupported_adc_type";
