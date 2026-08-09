@@ -57,11 +57,12 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 2
 fi
 
-NEEDS_GITHUB=0
+NEEDS_GITHUB=0 NEEDS_ANTHROPIC=0
 for f in "${files[@]}"; do
   case "$(basename "$f")" in
-    40-gcp.test.sh) ;;                  # GCP-only: needs no GitHub App
-    *) NEEDS_GITHUB=1 ;;
+    40-gcp.test.sh)   ;;                                  # neither
+    30-git.test.sh)   NEEDS_GITHUB=1 ;;                   # GitHub only
+    *)                NEEDS_GITHUB=1; NEEDS_ANTHROPIC=1 ;;
   esac
 done
 
@@ -98,14 +99,19 @@ if [ "$NEEDS_GITHUB" = 1 ]; then
   for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
     [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
   done
+fi
+if [ "$NEEDS_ANTHROPIC" = 1 ]; then
   if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
     skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
   fi
-else
-  # A GCP-only run. The stack still comes up — every provider reads its
-  # credential lazily, so a broker with no github-app.pem is healthy right up
-  # until something asks it for a GitHub token, which nothing here does.
-  printf '%sGCP-only run%s — GitHub and Anthropic credentials not required.\n' "$Y" "$N"
+fi
+if [ "$NEEDS_GITHUB" = 0 ] || [ "$NEEDS_ANTHROPIC" = 0 ]; then
+  # Every provider reads its credential lazily, so the broker is healthy
+  # without the ones this run does not use — right up until something asks it
+  # for a token, which by construction nothing here does.
+  printf '%spartial run%s — needs GitHub: %s, needs Anthropic: %s\n' \
+    "$Y" "$N" "$([ "$NEEDS_GITHUB" = 1 ] && echo yes || echo no)" \
+    "$([ "$NEEDS_ANTHROPIC" = 1 ] && echo yes || echo no)"
 fi
 
 if ! docker version >/dev/null 2>&1; then

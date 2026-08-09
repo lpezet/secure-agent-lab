@@ -40,6 +40,18 @@ holding secrets. Same checks, real stakes.
 **1. A dedicated GitHub App.** Not the one your agent uses. Create it, install
 it on one throwaway repository, download the private key.
 
+**Repository permissions — `Contents: Read and write`.** `30-git` pushes a
+scratch branch, and read-only Contents produces a clone that succeeds and a
+push that 403s with `Write access to repository not granted`. That reads like
+a proxy fault and is not one. Nothing else is needed: no Issues, no Pull
+requests, no Metadata beyond the default.
+
+If you change the permission on an App that is **already installed**, GitHub
+does not apply it until the installation accepts the update — look for the
+banner on the installation page, or the emailed request. Until then the
+installation keeps minting tokens at the old scope and the failure repeats
+identically.
+
 ```bash
 mkdir -p ~/.config/agent-creds-e2e
 cp ~/Downloads/<your-test-app>.private-key.pem ~/.config/agent-creds-e2e/github-app.pem
@@ -48,6 +60,9 @@ printf 'sk-ant-...' > ~/.config/agent-creds-e2e/anthropic.key
 # printf 'sk-ant-oat01-...' > ~/.config/agent-creds-e2e/anthropic-auth.token
 chmod 600 ~/.config/agent-creds-e2e/*
 ```
+
+Copying the `.pem` across a Windows filesystem boundary tends to land it
+`0777`; the `chmod` above is not decoration.
 
 **2. `.env`.**
 
