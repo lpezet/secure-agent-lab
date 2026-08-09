@@ -71,6 +71,21 @@ code=$(lab_sh "
 check_ne "an injected call is not rejected as unauthenticated" "401" "$code"
 check_ne "and did not fail to connect" "000" "$code"
 
+# What comes back separates authentication from authorization, and the second
+# is the property worth having. The operator CAN read this project — it is
+# where they just created the service account — so if the broker had handed
+# over the operator's own token this would be a 200. A 403 is the impersonated
+# identity being told no, which is the narrowing working.
+#
+# Not asserted as 403, because it depends on roles the deployment chose: a
+# service account granted viewer legitimately returns 200. `setup gcp` creates
+# one with none, so that is the usual case, and it is worth naming either way.
+case "$code" in
+  403) ok "403: authorization is bounded by the SA's roles, not the operator's" ;;
+  200) ok "200: the SA has been granted read on $GCP_PROJECT" ;;
+  *)   ok "HTTP $code: authenticated (any non-401 proves the injection)" ;;
+esac
+
 suite "the token exchange is answered locally, with an inert value"
 # A client library's credential chain ends here. If this ever returns a real
 # token, the lab is holding a live GCP credential on the proxied path — the

@@ -121,6 +121,12 @@ and visible in Google's session management. The SA needing no roles is also
 deliberate: the suite asserts an injected call is not rejected as
 *unauthenticated*, and a 403 proves that as well as a 200 does.
 
+That 403 is worth more than it looks. The probe targets the project you just
+created the SA in — one **you** can read. If the broker had handed over your
+own token instead of the impersonated one, it would come back 200. So a 403
+there is the narrowing working: authenticated as the service account, and
+authorized as nothing much.
+
 The refresh token carries your own cloud identity, which is exactly why it
 lives on the broker side and never in the lab. To revoke it later:
 
