@@ -218,6 +218,23 @@ no devcontainer lifecycle to hold it open. `run.sh` performs the two steps
 | `30-git` | Identity from the broker, clone over HTTPS via the credential helper, no token persisted into `.git/config`, push a scratch branch, verify it landed, delete it |
 | `40-gcp` | Google's own `tokeninfo` confirming the minted token belongs to the *service account* and not the operator, an injected call not rejected as unauthenticated, the token exchange answered with the inert placeholder rather than a real token, and no credential shape in the broker's log. Skips unless GCP is configured |
 
+## Rate limiting between suites
+
+`cred-gateway` limits the credential routes to `10r/m` with `burst 5`. That is
+a real control protecting the broker, and a normal deployment never approaches
+it — but four suites run back to back do, and the failure is misleading: the
+credential helper receives nginx's 503 page and git reports
+
+```
+warning: invalid credential line: <html>
+fatal: could not read Username for 'https://github.com'
+```
+
+which reads as a credential-helper bug. `run.sh` pauses between suites to let
+the bucket refill rather than raising the limit, so what runs here stays the
+configuration that ships. `E2E_SUITE_PAUSE=0` disables it when running a
+single suite.
+
 ## Cost and side effects
 
 Each run makes two small Anthropic calls (haiku, ≤32 output tokens), a handful

@@ -192,10 +192,25 @@ printf '%s── preparing lab container ──%s\n' "$B" "$N"
 
 # ------------------------------------------------------------------- run suites
 
+# cred-gateway rate-limits the credential routes at 10r/m, burst 5 — a real
+# control protecting the broker, and one a normal deployment never approaches.
+# Suites run back to back do: 10-boundary spends its budget, and 30-git's
+# credential helper then receives nginx's 503 page and reports `invalid
+# credential line: <html>`, which looks like a credential-helper bug and is
+# not one. Let the bucket refill between suites rather than raising the limit,
+# so what runs here stays the configuration that ships.
+: "${E2E_SUITE_PAUSE:=20}"
+
 failed=()
 started=$SECONDS
+first=1
 for f in "${files[@]}"; do
   name="$(basename "$f" .test.sh)"
+  if [ "$first" = 0 ] && [ "$E2E_SUITE_PAUSE" -gt 0 ]; then
+    printf '\n%s   … %ss for cred-gateway'"'"'s rate limiter to refill%s\n' "$Y" "$E2E_SUITE_PAUSE" "$N"
+    sleep "$E2E_SUITE_PAUSE"
+  fi
+  first=0
   printf '\n%s┏━ %s %s\n' "$B" "$name" "$N"
   if bash "$f"; then
     printf '%s┗━ %s ok%s\n' "$G" "$name" "$N"
