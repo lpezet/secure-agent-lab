@@ -42,6 +42,10 @@ services:
       # Egress allowlist (opt-in). Copy 001_allowlist.py from stack/proxy/addons
       # into ./proxy, then uncomment this. Absent file = every destination
       # permitted, so the mount is what turns it on.
+      # Copy it from the tag this service is pinned to, not from main: since
+      # 1.7.0 the addon does `import hostmatch`, which only exists in images
+      # built from 1.7.0 or later, and a newer copy on an older image fails to
+      # load with ModuleNotFoundError.
       # It lives here rather than in ./proxy because that directory is mounted
       # wholesale as /addons — a non-addon file in it would land there too.
       # - ./allowlist:/etc/agent-allowlist:ro

@@ -3,6 +3,12 @@ node_modules/
 *.log
 examples/*/workspace/
 
+# Importing stack/proxy/*.py directly — which 07-hostmatch does, and which is
+# the point of those modules being plain Python with no mitmproxy import —
+# leaves bytecode caches beside the source.
+__pycache__/
+*.pyc
+
 # Local scratch — notes, session-resume commands, roadmap jottings. This repo
 # is public; personal working files do not belong in it.
 /TODO.md
