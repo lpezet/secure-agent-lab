@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 const https = require("https");
 const { logEvent } = require("../audit");
@@ -93,11 +94,21 @@ async function userAccessToken(source) {
 // The service account named by the ADC file, cross-checked against config.
 // Taking it from the file alone would let a swapped file change which identity
 // the deployment issues without anything saying so.
+//
+// Where the name lives differs by shape: impersonation puts it in the
+// impersonation URL, a key file in client_email. Both are checked the same way
+// against the same configured value.
 function targetServiceAccount(adc) {
-  const url = adc.service_account_impersonation_url || "";
-  const m = url.match(/serviceAccounts\/([^:/]+):generateAccessToken/);
-  const fromFile = m ? decodeURIComponent(m[1]) : "";
-  if (!fromFile) throw new Error("ADC has no service_account_impersonation_url");
+  let fromFile = "";
+  if (adc.type === "service_account") {
+    fromFile = adc.client_email || "";
+    if (!fromFile) throw new Error("service_account ADC has no client_email");
+  } else {
+    const url = adc.service_account_impersonation_url || "";
+    const m = url.match(/serviceAccounts\/([^:/]+):generateAccessToken/);
+    fromFile = m ? decodeURIComponent(m[1]) : "";
+    if (!fromFile) throw new Error("ADC has no service_account_impersonation_url");
+  }
   if (CONFIGURED_SA && fromFile !== CONFIGURED_SA) {
     const err = new Error("configured service account does not match the ADC file");
     err.code = "sa_mismatch";
@@ -105,6 +116,44 @@ function targetServiceAccount(adc) {
     throw err;
   }
   return fromFile;
+}
+
+function b64url(buf) {
+  return Buffer.from(buf).toString("base64")
+    .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+// The key-file path: sign a short-lived assertion with the SA's own private
+// key and exchange it for an access token. No user is involved at any point,
+// which is the whole reason this shape exists — it does not expire and needs
+// nobody to re-authenticate.
+//
+// Node signs RS256 out of the box, so this adds no dependency. The key is read
+// per call from the read-only /secrets mount and never leaves this function.
+async function keyFileAccessToken(adc) {
+  const now = Math.floor(Date.now() / 1000);
+  const tokenUri = adc.token_uri || "https://oauth2.googleapis.com/token";
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT", kid: adc.private_key_id }));
+  const claims = b64url(JSON.stringify({
+    iss: adc.client_email,
+    scope: "https://www.googleapis.com/auth/cloud-platform",
+    aud: tokenUri,
+    iat: now,
+    exp: now + 3600,
+  }));
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(`${header}.${claims}`);
+  const signature = b64url(signer.sign(adc.private_key));
+
+  const r = await postForm(tokenUri, {
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion: `${header}.${claims}.${signature}`,
+  });
+  if (!r.access_token) throw new Error("no access_token in jwt-bearer response");
+  return {
+    token: r.access_token,
+    expiresAt: new Date(Date.now() + (r.expires_in || 3600) * 1000).toISOString(),
+  };
 }
 
 async function mintAccessToken() {
@@ -119,7 +168,11 @@ async function mintAccessToken() {
     err.code = "human_principal";
     throw err;
   }
-  if (adc.type !== "impersonated_service_account") {
+  // external_account is federation from an outside IdP. Deliberately not
+  // implemented rather than half-implemented: it cannot be exercised without
+  // an IdP to federate from, and shipping unverified credential code is worse
+  // than shipping a clear refusal.
+  if (adc.type !== "impersonated_service_account" && adc.type !== "service_account") {
     const err = new Error(`unsupported ADC type: ${adc.type}`);
     err.code = "unsupported_adc_type";
     throw err;
@@ -129,6 +182,16 @@ async function mintAccessToken() {
   const cached = tokenCache.get(sa);
   if (cached && new Date(cached.expiresAt) - Date.now() > SAFETY_WINDOW_MS) {
     return cached;
+  }
+
+  // A key file needs no user, so it never has to be re-authenticated. That is
+  // the trade it makes for being a permanent secret on disk — see PLAYBOOK for
+  // which shape suits which deployment.
+  if (adc.type === "service_account") {
+    const t = await keyFileAccessToken(adc);
+    const entry = { ...t, serviceAccount: sa, source: "key" };
+    tokenCache.set(sa, entry);
+    return entry;
   }
 
   const source = adc.source_credentials || {};
@@ -160,6 +223,7 @@ async function mintAccessToken() {
     token: r.accessToken,
     expiresAt: r.expireTime || new Date(Date.now() + 3600 * 1000).toISOString(),
     serviceAccount: sa,
+    source: "impersonation",
   };
   tokenCache.set(sa, entry);
   return entry;
@@ -200,6 +264,10 @@ module.exports = {
       provider: "gcp",
       service_account: t.serviceAccount,
       expires_at: t.expiresAt,
+      // Which credential shape produced it. Two deployments issuing the same
+      // authority by different means have different failure modes, and the
+      // trail should say which one this is.
+      source: t.source,
     });
     send(200, { token: t.token, expiresAt: t.expiresAt });
   },

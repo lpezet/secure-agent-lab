@@ -68,7 +68,7 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 | `/github/identity` | cred-gateway → setup-start.sh | App name+email for `git config`, lifetime-cached |
 | `/anthropic/cred` | proxy `020_anthropic.py` | Returns `{type, value}`; prefers `ANTHROPIC_AUTH_TOKEN_PATH` (OAuth) over `ANTHROPIC_API_KEY_PATH`, read fresh on each uncached call |
 | `/cloudflare/token?profile=` | proxy `030_cloudflare.py` | Mints scoped token via Cloudflare API, cached per profile. The `profile` param is a cross-check against the broker's own `CLOUDFLARE_PROFILE`, not an input — a mismatch is a 403 |
-| `/gcp/token` | proxy `040_gcp.py`, **and** cred-gateway → lab | Impersonated SA access token: refresh token → user access token → `generateAccessToken`. Cached per SA. Rejects a bare `authorized_user` ADC (the operator's own identity) and cross-checks the SA against `GCP_SERVICE_ACCOUNT`. Audits the SA email and expiry, never the token |
+| `/gcp/token` | proxy `040_gcp.py`, **and** cred-gateway → lab | SA access token by either shape: `impersonated_service_account` (refresh token → user access token → `generateAccessToken`) or `service_account` (RS256 JWT-bearer, no user, never expires). Cached per SA. Rejects a bare `authorized_user` ADC and `external_account`, and cross-checks the SA against `GCP_SERVICE_ACCOUNT`. Audits the SA email, expiry and which shape produced it, never the token |
 | `/healthz` | Docker healthcheck | |
 
 The broker makes direct outbound HTTPS calls to `api.github.com` and `api.cloudflare.com` — it does **not** go through the proxy. Routing through the proxy would be circular (proxy fetches creds from broker to authenticate outbound calls).

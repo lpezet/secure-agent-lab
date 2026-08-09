@@ -45,6 +45,7 @@ description.
 | GitHub | `api.github.com`, `uploads.github.com` | `/github/credential`, `/github/identity` | [`bank/github/`](bank/github/) |
 | Anthropic | `api.anthropic.com` | nothing | [`bank/anthropic/`](bank/anthropic/) |
 | Cloudflare | `api.cloudflare.com` | nothing | [`bank/cloudflare/`](bank/cloudflare/) |
+| GCP | `*.googleapis.com` | `/gcp/token` | [`bank/gcp/`](bank/gcp/) |
 
 Hosts, broker routes, env vars and secret files are **not** listed here — they
 are in each entry's `provider.json`, which is the thing the lint checks against
@@ -132,11 +133,35 @@ manifest precisely because exactly one of them is normally set.
   thing bounding blast radius — exactly as a GitHub App's permissions bound
   the installation token. A service account with `roles/owner` produces an
   agent with `roles/owner`.
-- **No service-account key exists anywhere.** The ADC file's long-lived secret
-  is the operator's refresh token, which is revocable and visible in Google's
-  session management, rather than a key file that is silent and permanent
-  until someone notices. A bare `authorized_user` ADC — the operator's own
-  identity with no impersonation — is refused by the broker outright.
+- **Two credential shapes, and the choice is the deployment's.** Both put the
+  same short-lived token in front of the agent; they differ in what the broker
+  has to hold and how each fails.
+
+  | | `impersonated_service_account` | `service_account` (key file) |
+  |---|---|---|
+  | broker holds | the operator's refresh token | the SA's private key |
+  | expires | when the OAuth session does | never |
+  | if it leaks | revocable, visible in Google session management | silent and permanent until noticed |
+  | unattended | **may need periodic human re-login** | yes |
+
+  Impersonation is the better default: no key exists anywhere, and many
+  organisations forbid keys outright via
+  `constraints/iam.disableServiceAccountKeyCreation`. But its refresh token is
+  not immortal — a Google Workspace **Cloud session-length policy** expires it
+  on a schedule (commonly 16–24h), and an OAuth client left in "Testing"
+  publishing status expires it in 7 days. When that happens the broker stops
+  minting until a human runs `gcloud auth application-default login` again,
+  which is fatal for an agent that is supposed to run unattended. On a personal
+  Google account with no such policy it typically lasts indefinitely.
+
+  If your account is under a session policy and nobody is around to
+  re-authenticate, use a key file and keep the service account narrow. Point
+  `GCP_ADC_PATH` at either shape; the broker detects which it has.
+
+- **A bare `authorized_user` ADC is refused outright** — that is the operator's
+  own identity with no impersonation at all, which is the thing this provider
+  exists to avoid. `external_account` (federation from an outside IdP) is not
+  implemented, and is refused rather than half-attempted.
 - **Which service account is deployment configuration, not the agent's
   choice.** `GCP_SERVICE_ACCOUNT` is set on both `proxy` and `broker`, and is
   cross-checked against the impersonation URL inside the ADC file; a mismatch

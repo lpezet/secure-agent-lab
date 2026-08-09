@@ -1,6 +1,6 @@
 {
   "name": "gcp",
-  "summary": "Short-lived GCP access token for an impersonated service account, from an ADC file holding no service-account key",
+  "summary": "Short-lived GCP access token for one service account, by impersonation (no key) or from a key file",
   "min_stack": "1.7.0",
   "load_band": "provider",
   "hosts": ["*.googleapis.com", "sts.googleapis.com", "oauth2.googleapis.com"],
@@ -8,7 +8,7 @@
     {
       "env": "GCP_ADC_PATH",
       "file": "gcp-adc.json",
-      "prompt": "GCP application default credentials JSON (impersonated_service_account preferred)",
+      "prompt": "GCP credentials JSON — impersonated_service_account (no key, may need periodic re-login) or service_account (key file, never expires)",
       "multiline": true
     }
   ],
@@ -16,7 +16,7 @@
     {
       "env": "GCP_SERVICE_ACCOUNT",
       "prompt": "Service account this deployment impersonates",
-      "help": "Full email, e.g. dev-ai-agent@my-project.iam.gserviceaccount.com. Cross-checked against the ADC file's impersonation URL: a mismatch is refused rather than silently preferred. Deployment configuration — the lab container does not choose which identity it gets, so two identities means two deployments."
+      "help": "Full email, e.g. dev-ai-agent@my-project.iam.gserviceaccount.com. Cross-checked against the ADC file — its impersonation URL, or client_email for a key file: a mismatch is refused rather than silently preferred. Deployment configuration — the lab container does not choose which identity it gets, so two identities means two deployments."
     }
   ],
   "broker_routes": [
