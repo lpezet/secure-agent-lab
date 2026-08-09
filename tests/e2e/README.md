@@ -68,7 +68,17 @@ real agent depends on turns a test bug into a production incident.
 
 ### GCP (optional)
 
-`40-gcp` skips without this and the rest of the tier still runs. Four commands,
+`40-gcp` skips without this and the rest of the tier still runs. It also runs
+**on its own, with no GitHub App and no Anthropic key**:
+
+```bash
+tests/e2e/run.sh 40
+```
+
+The tier's preflight is scoped to the suites actually selected, so a GCP-only
+run demands only `gcp-adc.json` and `GCP_SERVICE_ACCOUNT`. You still need
+`tests/e2e/.env` to exist (copy `.env.example`), and the credential directory,
+because compose mounts it. Four commands,
 and **no service-account key is created at any point** — that is the whole
 point of the design being tested.
 

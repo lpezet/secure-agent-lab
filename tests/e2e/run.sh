@@ -25,6 +25,33 @@ fi
 
 # ------------------------------------------------------------------ preflight
 
+# Which suites were asked for, and therefore which credentials this run needs.
+# Selecting first matters: demanding a GitHub App from someone running only
+# `tests/run.sh e2e 40` would skip the tier over a credential nothing in it
+# touches. Every suite also self-skips when its own inputs are missing, so this
+# table degrades to a skip rather than a false pass if it drifts.
+files=()
+if [ $# -gt 0 ]; then
+  for pat in "$@"; do
+    for f in "$E2E_DIR/$pat"*.test.sh; do [ -f "$f" ] && files+=("$f"); done
+  done
+else
+  for f in "$E2E_DIR"/*.test.sh; do [ -f "$f" ] && files+=("$f"); done
+fi
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "no test files matched" >&2
+  exit 2
+fi
+
+NEEDS_GITHUB=0
+for f in "${files[@]}"; do
+  case "$(basename "$f")" in
+    40-gcp.test.sh) ;;                  # GCP-only: needs no GitHub App
+    *) NEEDS_GITHUB=1 ;;
+  esac
+done
+
+
 : "${AGENT_CREDS_DIR:=$HOME/.config/agent-creds-e2e}"
 export AGENT_CREDS_DIR
 
@@ -47,17 +74,24 @@ if [ "$(cd "$AGENT_CREDS_DIR" 2>/dev/null && pwd)" = "$(cd "$PROD_CREDS" 2>/dev/
 fi
 
 [ -d "$AGENT_CREDS_DIR" ] || skip_tier "no credential directory at $AGENT_CREDS_DIR"
-[ -f "$AGENT_CREDS_DIR/github-app.pem" ] || skip_tier "no github-app.pem in $AGENT_CREDS_DIR"
 [ -f "$E2E_DIR/.env" ] || skip_tier "no tests/e2e/.env (copy .env.example and fill it in)"
 
 # shellcheck disable=SC1091
 set -a; . "$E2E_DIR/.env"; set +a
 
-for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
-  [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
-done
-if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
-  skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
+if [ "$NEEDS_GITHUB" = 1 ]; then
+  [ -f "$AGENT_CREDS_DIR/github-app.pem" ] || skip_tier "no github-app.pem in $AGENT_CREDS_DIR"
+  for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
+    [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
+  done
+  if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
+    skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
+  fi
+else
+  # A GCP-only run. The stack still comes up — every provider reads its
+  # credential lazily, so a broker with no github-app.pem is healthy right up
+  # until something asks it for a GitHub token, which nothing here does.
+  printf '%sGCP-only run%s — GitHub and Anthropic credentials not required.\n' "$Y" "$N"
 fi
 
 if ! docker version >/dev/null 2>&1; then
@@ -109,19 +143,6 @@ printf '%s── preparing lab container ──%s\n' "$B" "$N"
 ' || { printf '%sdev container preparation failed%s\n' "$R" "$N" >&2; exit 1; }
 
 # ------------------------------------------------------------------- run suites
-
-files=()
-if [ $# -gt 0 ]; then
-  for pat in "$@"; do
-    for f in "$E2E_DIR/$pat"*.test.sh; do [ -f "$f" ] && files+=("$f"); done
-  done
-else
-  for f in "$E2E_DIR"/*.test.sh; do [ -f "$f" ] && files+=("$f"); done
-fi
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "no test files matched" >&2
-  exit 2
-fi
 
 failed=()
 started=$SECONDS
