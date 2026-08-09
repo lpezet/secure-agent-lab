@@ -233,11 +233,30 @@ wait_http() {
   return 1
 }
 
-# Build an image only if it is missing, unless FORCE_BUILD=1.
+# Build an image if it is missing or older than its build context, unless
+# FORCE_BUILD=1 forces it regardless.
+#
+# The staleness check is not an optimisation, it is a correctness fix. Reusing
+# a cached image means the suite runs against whatever was baked in whenever
+# that image was last built, which is not necessarily the code under test.
+# Adding hostmatch.py to stack/proxy/ did exactly this: every proxy suite
+# failed with `ModuleNotFoundError: No module named 'hostmatch'` against an
+# image built before the module existed, and the reported failure ("proxy did
+# not become ready") pointed nowhere near the cause. A stale pass would have
+# been worse than the noisy failure.
 build_image() {
-  local tag="$1" context="$2"
+  local tag="$1" context="$2" built newer
   if [ "${FORCE_BUILD:-0}" != "1" ] && docker image inspect "$tag" >/dev/null 2>&1; then
-    return 0
+    # Truncate to whole seconds: docker reports nanoseconds, which find's date
+    # parser rejects.
+    built=$(docker image inspect -f '{{.Created}}' "$tag" 2>/dev/null | sed 's/\.[0-9]*Z\?$//; s/Z$//')
+    if [ -n "$built" ]; then
+      newer=$(find "$context" -type f -newermt "$built" -print -quit 2>/dev/null)
+    else
+      newer="unknown"      # could not read the timestamp: rebuild rather than guess
+    fi
+    [ -z "$newer" ] && return 0
+    printf '  %s is stale (%s changed since it was built) — rebuilding\n' "$tag" "${newer#"$context"/}"
   fi
   printf '  building %s from %s...\n' "$tag" "$context"
   if ! docker build -q -t "$tag" "$context" >/dev/null; then
