@@ -102,8 +102,13 @@ first, so re-running after a partial failure resumes rather than duplicating:
 3. grant your account `roles/iam.serviceAccountTokenCreator` on it
 4. `gcloud auth application-default login --impersonate-service-account`,
    under a throwaway `CLOUDSDK_CONFIG` so your own ADC is untouched
-5. copy the result to `$AGENT_CREDS_DIR/gcp-adc.json` and write
-   `GCP_SERVICE_ACCOUNT` back into `.env`
+5. copy the result to `$AGENT_CREDS_DIR/gcp-adc.json`, and write
+   `GCP_SERVICE_ACCOUNT` and `GCP_SA_UNIQUE_ID` back into `.env`
+
+That last value is not decoration. Google's `tokeninfo` reports a service
+account by **numeric id** — `email` appears only on user tokens carrying the
+email scope — so the numeric id is the only way the suite can say *this token
+belongs to that service account* rather than merely *some service account*.
 
 Then verify the shape of what it produced — the script does this too and
 refuses to finish if it is wrong:

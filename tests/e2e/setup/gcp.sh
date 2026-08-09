@@ -203,6 +203,19 @@ step "wiring tests/e2e/.env"
 set_env GCP_SERVICE_ACCOUNT "$SA_EMAIL"
 ok "GCP_SERVICE_ACCOUNT=$SA_EMAIL"
 
+# Google's tokeninfo reports a service account by NUMERIC id, not by email —
+# `email` appears only for user tokens carrying the email scope. So the suite
+# needs the unique id to be able to say "this token belongs to that service
+# account" rather than merely "some service account".
+UNIQUE_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$GCP_PROJECT" \
+              --format="value(uniqueId)" 2>/dev/null)
+if [ -n "$UNIQUE_ID" ]; then
+  set_env GCP_SA_UNIQUE_ID "$UNIQUE_ID"
+  ok "GCP_SA_UNIQUE_ID=$UNIQUE_ID"
+else
+  note "could not read the service account's uniqueId — 40-gcp will skip the identity check"
+fi
+
 printf '\n%sdone%s — run it with:\n' "$G" "$N"
 printf '  tests/e2e/run.sh 40\n\n'
 printf 'To remove everything this created:\n'

@@ -15,3 +15,6 @@ __pycache__/
 /resume.txt
 /NOTES.md
 /SCRATCH.md
+
+# Assembled fresh by tests/e2e/run.sh on every run.
+tests/e2e/.stage/

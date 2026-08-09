@@ -34,25 +34,35 @@ SECRET_PATTERNS+=(
 )
 
 suite "the broker mints for the configured service account, not the operator"
-# The whole point of impersonation. Google's tokeninfo reports the principal a
-# token belongs to, so this is the vendor confirming that the identity handed
-# out is the service account rather than the human whose refresh token the
-# broker holds.
-tok=$(lab_sh 'curl -s "$GCP_TOKEN_URL"')
-check_contains "cred-gateway serves /gcp/token" "$tok" "token"
-check_no_secret "the token is not echoed by this suite" "$tok" "${SECRET_PATTERNS[@]}"
+# The whole point of impersonation, confirmed by the vendor rather than by us.
+#
+# Nothing here ever puts the token in a shell variable. cred-gateway hands it
+# to the lab, the lab spends it, and only the parsed answer comes back — so a
+# failing assertion cannot dump a live credential into the terminal or a CI
+# log, which is a property no amount of check_no_secret would give.
+served=$(lab_sh 'curl -s -o /dev/null -w "%{http_code}" "$GCP_TOKEN_URL"')
+check "cred-gateway serves /gcp/token" "200" "$served"
 
-# tokeninfo takes the token in the query string, so this runs inside the lab
-# and only its parsed answer comes back out.
+# tokeninfo takes the token in the query string, so this runs inside the lab.
+# Fields only: `azp` is the principal, `scope` is what it may do.
 info=$(lab_sh '
   t=$(curl -s "$GCP_TOKEN_URL" | sed -n "s/.*\"token\":\"\([^\"]*\)\".*/\1/p")
-  curl -s "https://oauth2.googleapis.com/tokeninfo?access_token=$t"
+  curl -s "https://oauth2.googleapis.com/tokeninfo?access_token=$t" \
+    | tr -d " \n" | grep -oE "\"(azp|aud|scope|error[^\"]*)\":\"[^\"]*\"" || echo "NO-FIELDS"
 ')
-check_contains "Google recognises the token" "$info" "email"
-check_contains "and it belongs to the configured service account" \
-  "$info" "$GCP_SERVICE_ACCOUNT"
-check_not_contains "it is not a gserviceaccount-shaped lie about a user" \
-  "$info" "accounts.google.com"
+check_contains "Google recognises the token" "$info" "azp"
+check_contains "and scopes it to cloud-platform" "$info" "cloud-platform"
+
+# A service-account token reports its principal as a NUMERIC id. `email`
+# appears only on user tokens carrying the email scope, so asserting on the
+# address would fail against a perfectly good token — which is exactly what it
+# did before this was measured.
+if [ -n "${GCP_SA_UNIQUE_ID:-}" ]; then
+  check_contains "the principal is the configured service account" \
+    "$info" "$GCP_SA_UNIQUE_ID"
+else
+  skip "identity check" "GCP_SA_UNIQUE_ID not set — re-run: tests/e2e/run.sh setup gcp --yes"
+fi
 
 suite "the proxied path authenticates without the lab holding a credential"
 # The client sends the inert placeholder and the addon swaps it in flight.

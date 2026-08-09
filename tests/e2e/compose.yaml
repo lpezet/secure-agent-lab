@@ -20,12 +20,9 @@ services:
     volumes:
       # Dedicated creds directory — never the one a real agent uses. See README.
       - ${AGENT_CREDS_DIR:?set AGENT_CREDS_DIR (tests/e2e/run.sh does this)}:/secrets:ro
-      - ../../examples/claude-code/broker:/app/providers:ro
-      # GCP comes from the bank rather than the example: examples/claude-code
-      # is pinned to v1.2.0, below the 1.7.0 image this entry needs. Mounted
-      # unconditionally — the provider reads its config lazily, so with no
-      # gcp-adc.json present the route simply 502s and nothing else notices.
-      - ../../bank/gcp/broker/gcp.js:/app/providers/gcp.js:ro
+      # Assembled by run.sh from examples/claude-code plus bank/gcp — see the
+      # staging block there for why this is not a direct bind of the example.
+      - ./.stage/broker:/app/providers:ro
     env_file: .env
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
@@ -52,8 +49,7 @@ services:
       broker:
         condition: service_healthy
     volumes:
-      - ../../examples/claude-code/proxy:/addons:ro
-      - ../../bank/gcp/proxy/gcp.py:/addons/040_gcp.py:ro
+      - ./.stage/proxy:/addons:ro
       - proxy-certs:/home/mitmproxy/.mitmproxy
     env_file: .env
     environment:
@@ -74,8 +70,7 @@ services:
       broker:
         condition: service_healthy
     volumes:
-      - ../../examples/claude-code/cred-gateway:/etc/nginx/gateway.d:ro
-      - ../../bank/gcp/cred-gateway/gcp.conf:/etc/nginx/gateway.d/gcp.conf:ro
+      - ./.stage/cred-gateway:/etc/nginx/gateway.d:ro
     networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]

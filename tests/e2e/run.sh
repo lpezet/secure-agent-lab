@@ -128,6 +128,34 @@ teardown() {
 }
 trap teardown EXIT INT TERM
 
+# ------------------------------------------------------------------- staging
+#
+# The stack under test is assembled here rather than bind-mounted straight out
+# of examples/claude-code, because the GCP entry is not in that example — it is
+# pinned to v1.2.0, below the image this entry needs — and docker cannot create
+# a mountpoint for a single file inside a directory that is itself a read-only
+# bind mount. Mounting bank/gcp/broker/gcp.js at /app/providers/gcp.js fails
+# with "read-only file system" for exactly that reason.
+#
+# Rebuilt from scratch on every run, so it is a copy that cannot drift: change
+# examples/claude-code or bank/gcp and the next run picks it up.
+STAGE="$E2E_DIR/.stage"
+printf '%s── assembling the deployment ──%s\n' "$B" "$N"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"/{broker,proxy,cred-gateway}
+cp "$REPO_ROOT"/examples/claude-code/broker/*.js        "$STAGE/broker/"
+cp "$REPO_ROOT"/examples/claude-code/proxy/*.py         "$STAGE/proxy/"
+cp "$REPO_ROOT"/examples/claude-code/cred-gateway/*.conf "$STAGE/cred-gateway/"
+# GCP comes from the bank. 040_ puts it in the provider band, after the
+# example's own addons and well clear of 000_policy.py.
+cp "$REPO_ROOT/bank/gcp/broker/gcp.js"        "$STAGE/broker/gcp.js"
+cp "$REPO_ROOT/bank/gcp/proxy/gcp.py"         "$STAGE/proxy/040_gcp.py"
+cp "$REPO_ROOT/bank/gcp/cred-gateway/gcp.conf" "$STAGE/cred-gateway/gcp.conf"
+printf '  %d provider(s), %d addon(s), %d snippet(s)\n' \
+  "$(find "$STAGE/broker" -name '*.js' | wc -l)" \
+  "$(find "$STAGE/proxy" -name '*.py' | wc -l)" \
+  "$(find "$STAGE/cred-gateway" -name '*.conf' | wc -l)"
+
 printf '%s── building ──%s\n' "$B" "$N"
 # stack/lab is the real base image; tests/e2e/lab extends it with gh. Building
 # it here keeps that a reference rather than a copy.
