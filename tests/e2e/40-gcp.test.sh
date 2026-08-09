@@ -12,9 +12,9 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/e2e-lib.sh"
 
-if [ -z "${GCP_SERVICE_ACCOUNT:-}" ]; then
+if [ -z "${GCP_SERVICE_ACCOUNT:-}" ] || [ -z "${GCP_PROJECT:-}" ]; then
   suite "gcp"
-  skip "GCP_SERVICE_ACCOUNT is not set in tests/e2e/.env" "see README → GCP"
+  skip "GCP_PROJECT / GCP_SERVICE_ACCOUNT not set in tests/e2e/.env" "see README → GCP"
   finish
 fi
 if [ ! -f "$AGENT_CREDS_DIR/gcp-adc.json" ]; then
@@ -59,11 +59,15 @@ suite "the proxied path authenticates without the lab holding a credential"
 # Asserting "not 401" rather than "200" keeps this true whatever roles the
 # service account was given — an unauthenticated call would be 401, so
 # anything else proves a real credential was attached.
-code=$(lab_sh '
-  curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer proxy-injected" \
-    "https://cloudresourcemanager.googleapis.com/v1/projects/${GCP_TEST_PROJECT:-nonexistent-project}"
-')
+# The project the service account lives in — it exists by construction, so
+# there is nothing extra to configure. Which answer comes back depends on the
+# SA's roles and does not matter: 403 means Google authenticated it and denied
+# it, 200 means it was allowed, and only an unauthenticated call gets 401.
+code=$(lab_sh "
+  curl -s -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer proxy-injected' \
+    'https://cloudresourcemanager.googleapis.com/v1/projects/$GCP_PROJECT'
+")
 check_ne "an injected call is not rejected as unauthenticated" "401" "$code"
 check_ne "and did not fail to connect" "000" "$code"
 
