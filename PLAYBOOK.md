@@ -45,6 +45,7 @@ description.
 | GitHub | `api.github.com`, `uploads.github.com` | `/github/credential`, `/github/identity` | [`bank/github/`](bank/github/) |
 | Anthropic | `api.anthropic.com` | nothing | [`bank/anthropic/`](bank/anthropic/) |
 | Cloudflare | `api.cloudflare.com` | nothing | [`bank/cloudflare/`](bank/cloudflare/) |
+| GCP | `*.googleapis.com` | `/gcp/token` | [`bank/gcp/`](bank/gcp/) |
 
 Hosts, broker routes, env vars and secret files are **not** listed here — they
 are in each entry's `provider.json`, which is the thing the lint checks against
@@ -120,6 +121,67 @@ manifest precisely because exactly one of them is normally set.
   two deployments, not one deployment with a header.
 - **`CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy** satisfying `wrangler`'s
   "am I authenticated" check. Never replace it with a real token.
+
+### GCP
+
+- **The agent's authority is exactly the impersonated service account's IAM
+  roles.** This is the sentence to read twice. The broker holds an ADC file,
+  exchanges the user's refresh token for a user access token, and calls
+  `generateAccessToken` on the service account named by `GCP_SERVICE_ACCOUNT`;
+  what comes back can do whatever that SA can do, for an hour, and nothing
+  more. Choosing those roles narrowly is the deployment's job and is the only
+  thing bounding blast radius — exactly as a GitHub App's permissions bound
+  the installation token. A service account with `roles/owner` produces an
+  agent with `roles/owner`.
+- **Two credential shapes, and the choice is the deployment's.** Both put the
+  same short-lived token in front of the agent; they differ in what the broker
+  has to hold and how each fails.
+
+  | | `impersonated_service_account` | `service_account` (key file) |
+  |---|---|---|
+  | broker holds | the operator's refresh token | the SA's private key |
+  | expires | when the OAuth session does | never |
+  | if it leaks | revocable, visible in Google session management | silent and permanent until noticed |
+  | unattended | **may need periodic human re-login** | yes |
+
+  Impersonation is the better default: no key exists anywhere, and many
+  organisations forbid keys outright via
+  `constraints/iam.disableServiceAccountKeyCreation`. But its refresh token is
+  not immortal — a Google Workspace **Cloud session-length policy** expires it
+  on a schedule (commonly 16–24h), and an OAuth client left in "Testing"
+  publishing status expires it in 7 days. When that happens the broker stops
+  minting until a human runs `gcloud auth application-default login` again,
+  which is fatal for an agent that is supposed to run unattended. On a personal
+  Google account with no such policy it typically lasts indefinitely.
+
+  If your account is under a session policy and nobody is around to
+  re-authenticate, use a key file and keep the service account narrow. Point
+  `GCP_ADC_PATH` at either shape; the broker detects which it has.
+
+- **A bare `authorized_user` ADC is refused outright** — that is the operator's
+  own identity with no impersonation at all, which is the thing this provider
+  exists to avoid. `external_account` (federation from an outside IdP) is not
+  implemented, and is refused rather than half-attempted.
+- **Which service account is deployment configuration, not the agent's
+  choice.** `GCP_SERVICE_ACCOUNT` is set on both `proxy` and `broker`, and is
+  cross-checked against the impersonation URL inside the ADC file; a mismatch
+  is a 403 rather than a silent preference. Two identities means two
+  deployments.
+- **`CLOUDSDK_AUTH_ACCESS_TOKEN=proxy-injected` is a dummy**, the top of
+  `gcloud`'s credential priority list. The client libraries do not read it and
+  need an ADC file instead, which `lab/setup.sh` writes — also inert, an
+  `external_account` whose credential source is a script printing a fixed
+  dummy. Neither holds a secret. Never replace either with a real value.
+- **`gcloud` needs its own CA variable.** `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`
+  must point at the proxy CA; `gcloud` reads none of `REQUESTS_CA_BUNDLE`,
+  `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`, and fails with
+  `CERTIFICATE_VERIFY_FAILED` without it. It does honour `http_proxy` /
+  `https_proxy`, so no `CLOUDSDK_PROXY_*` settings are needed.
+- **`/gcp/token` is exposed through cred-gateway**, unlike Anthropic's and
+  Cloudflare's credential routes. It is there for tooling the proxy cannot
+  mediate, gRPC-based client libraries being the known case. It hands over a
+  real short-lived token, on the same terms as `/github/credential` — see the
+  first bullet for what that token can do.
 
 ## Generating a stack
 

@@ -569,7 +569,7 @@ for m in bank/*/provider.json; do
     q % 2 == 1 { ds = 1; next }
     { print line }
   ' "$addon" \
-    | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
+    | grep -oE '"\*?\.?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''\*?\.?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
     | tr -d '"'\''' | sort -u)
   missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
   extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))

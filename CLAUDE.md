@@ -68,6 +68,7 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 | `/github/identity` | cred-gateway → setup-start.sh | App name+email for `git config`, lifetime-cached |
 | `/anthropic/cred` | proxy `020_anthropic.py` | Returns `{type, value}`; prefers `ANTHROPIC_AUTH_TOKEN_PATH` (OAuth) over `ANTHROPIC_API_KEY_PATH`, read fresh on each uncached call |
 | `/cloudflare/token?profile=` | proxy `030_cloudflare.py` | Mints scoped token via Cloudflare API, cached per profile. The `profile` param is a cross-check against the broker's own `CLOUDFLARE_PROFILE`, not an input — a mismatch is a 403 |
+| `/gcp/token` | proxy `040_gcp.py`, **and** cred-gateway → lab | SA access token by either shape: `impersonated_service_account` (refresh token → user access token → `generateAccessToken`) or `service_account` (RS256 JWT-bearer, no user, never expires). Cached per SA. Rejects a bare `authorized_user` ADC and `external_account`, and cross-checks the SA against `GCP_SERVICE_ACCOUNT`. Audits the SA email, expiry and which shape produced it, never the token |
 | `/healthz` | Docker healthcheck | |
 
 The broker makes direct outbound HTTPS calls to `api.github.com` and `api.cloudflare.com` — it does **not** go through the proxy. Routing through the proxy would be circular (proxy fetches creds from broker to authenticate outbound calls).
@@ -82,6 +83,7 @@ mitmproxy with addons in `stack/proxy/addons/`, bind-mounted into the container 
 - **`010_github.py`** — matches `api.github.com` and `uploads.github.com` only. Fetches token from broker, injects as `Authorization: token ...`. Strips whatever the client sent. **Does not match `github.com`** — git push/pull goes through the credential helper path, not here.
 - **`020_anthropic.py`** — matches `api.anthropic.com`. Injects the API key. Blocks `/v1/organizations/*` (Admin API). Uses `responseheaders` hook + `flow.response.stream = True` for SSE to avoid buffering streamed responses.
 - **`030_cloudflare.py`** — matches `api.cloudflare.com`. Injects a scoped token. Which profile comes from `CLOUDFLARE_PROFILE` on the proxy service (default `workers-deploy`); `X-Cf-Profile` is stripped and discarded, never read.
+- **`040_gcp.py`** — matches `*.googleapis.com` via `hostmatch`. Two behaviours: a token exchange at `sts.`/`oauth2.googleapis.com` is **answered locally** with the inert `proxy-injected` value so a client library's credential chain completes without reaching Google; every other `*.googleapis.com` request gets the client's auth stripped and a broker-minted token injected. Which SA comes from `GCP_SERVICE_ACCOUNT` on the proxy service.
 
 All addons cache credentials with a 5-minute TTL (`cachetools.TTLCache`). A 401 from GitHub clears the cache immediately.
 
@@ -102,6 +104,8 @@ Both examples vendor `cred-gateway/github.conf`, the counterpart to their `proxy
 Snippets must use exact-match locations (`location = /path`); a prefix match like `location /github/` would expose `/github/token`. The mount source must sit outside whatever is mounted at `/workspace`, or the lab container could widen its own whitelist — `examples/dev-container` mounts `../:/workspace` so it shadows `.devcontainer` with a nested read-only bind to close that.
 
 Everything else returns 403. `/anthropic/cred`, `/github/token`, and `/cloudflare/token` are intentionally not exposed — exposing them would allow the lab container to exfiltrate raw credentials.
+
+`bank/gcp/cred-gateway/gcp.conf` exposes `/gcp/token`, which is the same bargain as `/github/credential` rather than an exception to the rule above: it hands the lab a real short-lived token because some tooling cannot be mediated by the proxy at all (gRPC client libraries, pending #48). What that token can do is exactly the impersonated service account's IAM roles — bounding it is the deployment's job, the same way a GitHub App's permissions bound the installation token. The routes that stay unexposed are the ones handing over a *reusable* secret rather than a short-lived scoped one.
 
 cred-gateway also writes a JSON audit line per request (`log_format audit_json` in `nginx.conf`) to `/var/log/audit/cred-gateway.jsonl`, separate from the existing stdout access log. `/healthz` opts out via `access_log off;` in its location block so healthchecks do not spam the trail. Unlike the broker/proxy helpers this is not opt-in: nginx opens configured `access_log` targets at startup and fails hard if the directory is missing, so the Dockerfile bakes in an empty `/var/log/audit` (same "valid unmounted" treatment as `gateway.d`) — the runtime volume mount just shadows it.
 
