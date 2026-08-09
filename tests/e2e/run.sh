@@ -23,6 +23,20 @@ else
   G=''; R=''; Y=''; B=''; N=''
 fi
 
+# ----------------------------------------------------------------- subcommands
+#
+# `setup <name>` runs a one-time provisioning script instead of the suites.
+# Dispatched here rather than implemented here: run.sh is about running tests,
+# and gcloud logic in it would make that less true with every provider added.
+if [ "${1:-}" = "setup" ]; then
+  shift
+  name="${1:-}"; shift 2>/dev/null || true
+  [ -n "$name" ] || { echo "usage: run.sh setup <provider> [--yes|--teardown]" >&2; exit 2; }
+  script="$E2E_DIR/setup/$name.sh"
+  [ -f "$script" ] || { echo "no setup script for '$name' (looked for $script)" >&2; exit 2; }
+  exec bash "$script" "$@"
+fi
+
 # ------------------------------------------------------------------ preflight
 
 # Which suites were asked for, and therefore which credentials this run needs.

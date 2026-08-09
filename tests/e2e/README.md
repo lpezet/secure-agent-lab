@@ -77,65 +77,89 @@ tests/e2e/run.sh 40
 
 The tier's preflight is scoped to the suites actually selected, so a GCP-only
 run demands only `gcp-adc.json` and `GCP_SERVICE_ACCOUNT`. You still need
-`tests/e2e/.env` to exist (copy `.env.example`), and the credential directory,
-because compose mounts it. Four commands,
-and **no service-account key is created at any point** — that is the whole
-point of the design being tested.
+`tests/e2e/.env` to exist and the credential directory, because compose mounts
+it.
+
+**Setup is scripted.** Fill in two values in `.env` and run it:
+
+```bash
+GCP_PROJECT=your-test-project
+GCP_SA=sal-e2e-agent          # already the default
+```
+
+```bash
+tests/e2e/run.sh setup gcp              # plan, confirm, apply
+tests/e2e/run.sh setup gcp --yes        # no prompt, for reruns
+tests/e2e/run.sh setup gcp --teardown   # remove what it created
+```
+
+It prints what it will do and asks before touching anything. Each step checks
+first, so re-running after a partial failure resumes rather than duplicating:
+
+1. enable `iamcredentials.googleapis.com` — impersonation fails without it,
+   with a 403 that reads like a permissions problem
+2. create the service account, **with no roles at all**
+3. grant your account `roles/iam.serviceAccountTokenCreator` on it
+4. `gcloud auth application-default login --impersonate-service-account`,
+   under a throwaway `CLOUDSDK_CONFIG` so your own ADC is untouched
+5. copy the result to `$AGENT_CREDS_DIR/gcp-adc.json` and write
+   `GCP_SERVICE_ACCOUNT` back into `.env`
+
+Then verify the shape of what it produced — the script does this too and
+refuses to finish if it is wrong:
+
+```bash
+jq '.type, (has("private_key"))' ~/.config/agent-creds-e2e/gcp-adc.json
+# "impersonated_service_account"
+# false
+```
+
+**No service-account key is created at any point.** That is the property being
+tested, not an incidental detail: the grant in step 3 is what replaces a key
+file, and the long-lived secret ends up being your refresh token — revocable,
+and visible in Google's session management. The SA needing no roles is also
+deliberate: the suite asserts an injected call is not rejected as
+*unauthenticated*, and a 403 proves that as well as a 200 does.
+
+The refresh token carries your own cloud identity, which is exactly why it
+lives on the broker side and never in the lab. To revoke it later:
+
+```bash
+tests/e2e/run.sh setup gcp --teardown   # deletes the SA and the ADC file
+gcloud auth application-default revoke  # if you want the token itself dead
+```
+
+<details>
+<summary>Doing it by hand instead</summary>
 
 ```bash
 PROJECT=your-test-project
 SA=sal-e2e-agent
 SA_EMAIL="$SA@$PROJECT.iam.gserviceaccount.com"
 
-# 1. A service account with NO roles. It can authenticate and do nothing else,
-#    which is deliberate: 40-gcp asserts that an injected call is not rejected
-#    as *unauthenticated*, and a 403 proves that as well as a 200 does.
+gcloud services enable iamcredentials.googleapis.com --project="$PROJECT"
+
 gcloud iam service-accounts create "$SA" --project="$PROJECT" \
   --display-name="secure-agent-lab e2e (no permissions)"
 
-# 2. Let yourself impersonate it. This is the grant that replaces a key file.
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --project="$PROJECT" \
   --member="user:$(gcloud config get-value account)" \
   --role="roles/iam.serviceAccountTokenCreator"
 
-# 3. Produce an ADC file that impersonates it. CLOUDSDK_CONFIG points somewhere
-#    throwaway ON PURPOSE: without it this overwrites your own
-#    ~/.config/gcloud/application_default_credentials.json, and you would be
-#    re-running `gcloud auth application-default login` to get your own back.
+# CLOUDSDK_CONFIG is not optional here: without it this overwrites your own
+# ~/.config/gcloud/application_default_credentials.json.
 CLOUDSDK_CONFIG=/tmp/sal-e2e-gcloud gcloud auth application-default login \
   --impersonate-service-account="$SA_EMAIL"
 
-# 4. Hand it to the tier.
 cp /tmp/sal-e2e-gcloud/application_default_credentials.json \
    ~/.config/agent-creds-e2e/gcp-adc.json
 chmod 600 ~/.config/agent-creds-e2e/gcp-adc.json
 rm -rf /tmp/sal-e2e-gcloud
 ```
 
-Then set `GCP_SERVICE_ACCOUNT` in `.env` to `$SA_EMAIL`. Optionally set
-`GCP_TEST_PROJECT`; it needs neither to exist nor to be readable.
-
-Check what you produced before trusting it — the file should say
-`impersonated_service_account`, and contain no `private_key`:
-
-```bash
-jq '.type, (.service_account_impersonation_url // "none"), (has("private_key"))' \
-  ~/.config/agent-creds-e2e/gcp-adc.json
-# "impersonated_service_account"
-# "https://iamcredentials.googleapis.com/v1/.../$SA_EMAIL:generateAccessToken"
-# false
-```
-
-The long-lived secret in that file is **your refresh token**, not a key. It is
-revocable (`gcloud auth application-default revoke`, or Google's session
-management) and it carries your own cloud identity, which is why it lives on
-the broker side and never in the lab. Cleaning up afterwards:
-
-```bash
-gcloud iam service-accounts delete "$SA_EMAIL" --project="$PROJECT"
-rm ~/.config/agent-creds-e2e/gcp-adc.json
-```
+Then set `GCP_SERVICE_ACCOUNT="$SA_EMAIL"` in `.env`.
+</details>
 
 ## The stack under test
 
