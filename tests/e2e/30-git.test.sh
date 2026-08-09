@@ -36,6 +36,19 @@ if [ -z "$name" ] || [ -z "$email" ]; then
   finish
 fi
 
+# An empty repository has no default branch, so the first branch pushed to it
+# becomes the default — and GitHub refuses to delete a default branch. The
+# scratch branch would be unremovable, and this suite would leave a permanent
+# mark on the repository it was pointed at. Refuse to start rather than make a
+# mess that has to be cleaned up by hand.
+empty=$(lab_sh "gh api repos/$REPO --jq .size 2>/dev/null")
+if [ "$empty" = "0" ]; then
+  suite "clone and push"
+  skip "$REPO has no commits" \
+    "push it an initial commit first — the first branch pushed to an empty repo becomes the default, and a default branch cannot be deleted"
+  finish
+fi
+
 BRANCH="e2e-$(date +%Y%m%d-%H%M%S)-$$"
 
 # Always try to remove the remote branch, even if the push assertion failed

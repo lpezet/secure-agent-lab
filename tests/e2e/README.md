@@ -40,6 +40,11 @@ holding secrets. Same checks, real stakes.
 **1. A dedicated GitHub App.** Not the one your agent uses. Create it, install
 it on one throwaway repository, download the private key.
 
+**The repository must not be empty.** Give it at least one commit — a README
+is enough. The first branch pushed to an empty repo becomes its default
+branch, and GitHub refuses to delete a default branch, so the scratch branch
+would be permanent. `30-git` checks and skips rather than leaving that behind.
+
 **Repository permissions — `Contents: Read and write`.** `30-git` pushes a
 scratch branch, and read-only Contents produces a clone that succeeds and a
 push that 403s with `Write access to repository not granted`. That reads like
