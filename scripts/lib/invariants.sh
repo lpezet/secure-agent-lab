@@ -366,6 +366,152 @@ EOF
   _inv_report "$f" "$out"
 }
 
+# ----------------------------------------------- checks: the secrets directory
+#
+# A new class. Every check above reads a file INSIDE the deployment — an addon,
+# a provider, a snippet, a compose file. These read deployment *inputs*, which
+# live on the host, outside anything the scanner is otherwise pointed at. They
+# run only when `--secrets-dir` is given, and their absence is reported rather
+# than passed over.
+#
+# THE RULE: the credential's principal must not be the human operator.
+#
+# Value isolation survives a personal token — the agent still never reads it,
+# the broker holds it, the proxy injects it. Authority isolation does not: the
+# agent acts as the human, everywhere that human can reach. Only the second
+# depends on what is in this directory, and it is the one that sets blast
+# radius. The mechanism is fine and the setup is the whole risk.
+#
+# NOTHING HERE MAY PRINT A FILE'S CONTENTS. Detection is by shape — a prefix, a
+# PEM header, a JSON type field — using quiet greps, and output is a filename
+# and a verdict. A check that leaks the credential it is checking would be a
+# worse bug than the one it looks for. `tests/integration/08-credential-principal`
+# asserts that directly, against real credential-shaped fixtures.
+
+# _inv_adc_type <file> — the TOP-LEVEL `type` field of a Google ADC file.
+# The value is a type name, never a secret.
+#
+# Depth matters, and a plain grep gets this wrong on a real file. An
+# impersonated ADC nests the credential that does the impersonating:
+#
+#   { "service_account_impersonation_url": "...",
+#     "source_credentials": { ..., "type": "authorized_user" },
+#     "type": "impersonated_service_account" }
+#
+# gcloud writes those keys alphabetically, so the nested `authorized_user`
+# comes FIRST — and reading it would call the safest shape this stack supports
+# the operator's own identity, on every deployment that uses it. Found by
+# running this against a real ~/.config/gcloud ADC rather than a fixture.
+#
+# So: track brace depth, ignore anything inside a string, report `type` only at
+# depth 1. awk rather than a JSON parser because this must keep working on a
+# deployment with nothing installed.
+_inv_adc_type() {
+  awk '
+    {
+      line = $0
+      n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (instr) {
+          if (c == "\\") { i++; continue }
+          if (c == "\"") { instr = 0; buf = buf "\"" }
+          else buf = buf c
+          continue
+        }
+        if (c == "\"") { instr = 1; buf = buf "\"" ; continue }
+        if (c == "{" || c == "[") { depth++; buf = buf c; continue }
+        if (c == "}" || c == "]") { depth--; buf = buf c; continue }
+        # Record depth alongside the text so the match below can be scoped.
+        buf = buf c
+        if (c == ":") buf = buf "\001" depth "\002"
+      }
+    }
+    END {
+      # "type"<:><depth 1><"value">
+      if (match(buf, /"type"[ \t]*:\001 ?1\002[ \t]*"[a-z_]+"/)) {
+        seg = substr(buf, RSTART, RLENGTH)
+        sub(/.*"/, "", seg)
+        n2 = match(buf, /"type"[ \t]*:\001 ?1\002[ \t]*"[a-z_]+"/)
+        seg = substr(buf, RSTART, RLENGTH)
+        gsub(/.*\002[ \t]*"/, "", seg); gsub(/".*/, "", seg)
+        print seg
+      }
+    }
+  ' "$1" 2>/dev/null
+}
+
+# _inv_classify <file> — machine | human | unknown | none, on stdout.
+# `none` means "a credential with no machine identity to compare against".
+_inv_classify() {
+  local f="$1" adc
+  adc=$(_inv_adc_type "$f")
+  case "$adc" in
+    # A bare authorized_user IS the operator: their own Google identity, with
+    # no service account in front of it.
+    authorized_user) printf 'human'; return ;;
+    service_account|impersonated_service_account|external_account)
+      printf 'machine'; return ;;
+  esac
+
+  # A GitHub App key, or a service-account key. Either way a machine.
+  if grep -q 'BEGIN [A-Z ]*PRIVATE KEY' "$f" 2>/dev/null; then
+    printf 'machine'; return
+  fi
+
+  # GitHub personal tokens. ghp_/github_pat_ are a user's own; gho_/ghu_ are
+  # OAuth-user tokens, equally the human. ghs_ is a server-to-server
+  # installation token — a machine, but short-lived and not a thing to store
+  # here, so it is left to `unknown` rather than blessed.
+  if grep -qE '(^|[^A-Za-z0-9_])(ghp_|github_pat_|gho_|ghu_)[A-Za-z0-9_]{20,}' "$f" 2>/dev/null; then
+    printf 'human'; return
+  fi
+
+  # Anthropic has no machine identity at all — no App, no service account, no
+  # impersonation. There is nothing to check, and saying so is the point.
+  if grep -qE 'sk-ant-' "$f" 2>/dev/null; then
+    printf 'none'; return
+  fi
+
+  printf 'unknown'
+}
+
+# inv_credential_principal <dir> — credentials whose principal is the operator.
+# Directory-level, like inv_policy_addon_first, so it is called directly rather
+# than through the registry.
+inv_credential_principal() {
+  local d="$1" f out=""
+  [ -d "$d" ] || return 0
+  # -maxdepth 1 and no -L: never follow a path out of the directory given.
+  for f in $(find "$d" -maxdepth 1 -type f 2>/dev/null | sort); do
+    [ "$(_inv_classify "$f")" = human ] || continue
+    out="${out}0: $(basename "$f") — the principal is the operator, not a machine"$'\n'
+  done
+  out=$(printf '%s' "$out" | grep -v '^$' || true)
+  _inv_report "$d" "$out"
+}
+
+# inv_credential_unclassified <dir> — everything this cannot vouch for.
+# Separate function, and a note rather than a failure, because "I do not
+# recognise this shape" and "this is the human" are different claims and only
+# one of them is a finding. A clean run of the first with several of these is
+# exactly the situation where a clean result must not read as a pass.
+inv_credential_unclassified() {
+  local d="$1" f kind out=""
+  [ -d "$d" ] || return 0
+  for f in $(find "$d" -maxdepth 1 -type f 2>/dev/null | sort); do
+    kind=$(_inv_classify "$f")
+    case "$kind" in
+      none)
+        out="${out}0: $(basename "$f") — this provider has no machine identity, so nothing here can be checked"$'\n' ;;
+      unknown)
+        out="${out}0: $(basename "$f") — shape not recognised; check by hand whose credential this is"$'\n' ;;
+    esac
+  done
+  out=$(printf '%s' "$out" | grep -v '^$' || true)
+  _inv_report "$d" "$out"
+}
+
 # ------------------------------------------------------- directory-level check
 
 # 000_policy.py must run before any addon can act on a request; entrypoint.sh
