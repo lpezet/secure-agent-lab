@@ -23,12 +23,14 @@ services:
       # Assembled by run.sh from examples/claude-code plus bank/gcp — see the
       # staging block there for why this is not a direct bind of the example.
       - ./.stage/broker:/app/providers:ro
+      - audit-logs:/var/log/audit
     env_file: .env
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
       ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
       ANTHROPIC_AUTH_TOKEN_PATH: /secrets/anthropic-auth.token
       GCP_ADC_PATH: /secrets/gcp-adc.json
+      AUDIT_LOG: /var/log/audit/broker.jsonl
     networks: [secure]
     healthcheck:
       test:
@@ -51,10 +53,12 @@ services:
     volumes:
       - ./.stage/proxy:/addons:ro
       - proxy-certs:/home/mitmproxy/.mitmproxy
+      - audit-logs:/var/log/audit
     env_file: .env
     environment:
       BROKER_URL: http://broker:8080
       PYTHONUNBUFFERED: "1"
+      AUDIT_LOG: /var/log/audit/proxy.jsonl
     networks: [secure, lab]
     healthcheck:
       test:
@@ -71,6 +75,7 @@ services:
         condition: service_healthy
     volumes:
       - ./.stage/cred-gateway:/etc/nginx/gateway.d:ro
+      - audit-logs:/var/log/audit
     networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
@@ -89,6 +94,20 @@ services:
     networks:
       lab:
         aliases: [attacker-host]
+
+  # Not a nicety. broker (node) and proxy (mitmproxy) are different non-root
+  # uids writing into one shared directory, and this is the only service that
+  # can chmod it for both — its entrypoint does so on every start. Without it
+  # the trail is silently empty for whichever uid loses, which is exactly the
+  # failure this tier exists to not have.
+  #
+  # observer is deliberately absent: it publishes the trail over HTTP and
+  # nothing here needs to read it that way. The suites read the volume.
+  log-rotator:
+    build: ../../stack/log-rotator
+    volumes:
+      - audit-logs:/var/log/audit
+    restart: unless-stopped
 
   lab:
     build: ./lab
@@ -144,3 +163,4 @@ networks:
 
 volumes:
   proxy-certs:
+  audit-logs:

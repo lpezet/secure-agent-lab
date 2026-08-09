@@ -245,6 +245,7 @@ no devcontainer lifecycle to hold it open. `run.sh` performs the two steps
 | `20-injection` | Anthropic and GitHub over real HTTPS with no credential in the request, SSE not buffered, Admin API blocked, and the pre-fix exploit — claim to be the vendor, deliver to your own server — leaking nothing |
 | `30-git` | Identity from the broker, clone over HTTPS via the credential helper, no token persisted into `.git/config`, push a scratch branch, verify it landed, delete it |
 | `40-gcp` | Google's own `tokeninfo` confirming the minted token belongs to the *service account* and not the operator, an injected call not rejected as unauthenticated, the token exchange answered with the inert placeholder rather than a real token, and no credential shape in the broker's log. Skips unless GCP is configured |
+| `50-audit` | The audit trail produced by real credentials: every service writes to it, `token_issued` names the `permissions` and `repository_selection` a live installation actually grants, the proxy records what it injected, cred-gateway records the credential-helper request but not the healthcheck, the shared directory is writable by three different non-root uids, and no live credential or key material appears anywhere in it |
 
 ## Rate limiting between suites
 
