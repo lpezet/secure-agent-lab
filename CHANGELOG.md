@@ -8,6 +8,141 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.7.0 — 2026-08-09
+
+A cloud identity the agent can use and cannot take, and one host matcher
+instead of one per addon.
+
+### Added
+
+**GCP, as a bank entry.** The agent gets a short-lived access token for one
+service account, and the sentence that bounds blast radius is the one to read
+twice: **its authority is exactly that service account's IAM roles**. A service
+account with `roles/owner` produces an agent with `roles/owner`. Choosing those
+roles narrowly is the deployment's job — the same bargain as a GitHub App's
+permissions bounding an installation token, now stated outright in
+`PLAYBOOK.md` rather than left implicit.
+
+Two credential shapes, because they fail differently rather than because one is
+better:
+
+| | `impersonated_service_account` | `service_account` (key file) |
+|---|---|---|
+| broker holds | the operator's refresh token | the SA's private key |
+| expires | when the OAuth session does | never |
+| if it leaks | revocable, visible in Google session management | silent and permanent until noticed |
+| unattended | **may need periodic human re-login** | yes |
+
+Impersonation is the recommendation: no key exists anywhere, and many
+organisations forbid keys outright via
+`constraints/iam.disableServiceAccountKeyCreation`. It is not the only workable
+choice. A Google Workspace Cloud session-length policy expires that refresh
+token on a schedule — commonly 16–24 hours — and when it goes the broker stops
+minting until a human re-runs `gcloud auth application-default login`, which is
+fatal for an agent meant to run unattended. Both shapes ship and the trade is
+documented rather than the alternative being omitted.
+
+A bare `authorized_user` ADC is refused outright: that is the operator's own
+identity with no narrowing at all. `external_account` (Workload Identity
+Federation) is refused explicitly as unimplemented — it cannot be exercised
+without a real identity provider to federate from, which would make it the only
+credential path taken on faith. Split out as its own issue rather than shipped
+unverified.
+
+**The addon does two things, and the split is the design.** A Google client
+library will not call an API until its credential chain has produced a token,
+and with the lab's inert ADC file that chain ends in a POST to
+`sts.googleapis.com`. The addon answers that exchange itself, with the same
+inert `proxy-injected` value the lab already hands `gcloud` and `gh`. The
+client is satisfied and holds nothing; the real token is attached in flight on
+the API call. Answering the exchange with the real token would also work and is
+simpler — the inert value is preferred because an injected token then exists
+only on requests already bound for `googleapis.com`.
+
+`/gcp/token` **is** exposed through cred-gateway, unlike Anthropic's and
+Cloudflare's credential routes. Some tooling cannot be mediated by the proxy at
+all — gRPC client libraries are the known case — and this is the same bargain
+as `/github/credential` rather than an exception to the rule. The routes that
+stay closed are the ones handing over a *reusable* secret rather than a
+short-lived scoped one.
+
+**`stack/proxy/hostmatch.py` — one matcher, shared.** `001_allowlist.py` had
+the correct suffix algorithm and kept it private, so the next addon needing it
+had to write its own. Host matching reimplemented per addon is how
+`pretty_host` ended up in three files at once and stayed there. Baked into the
+image beside `audit.py`, on the same `PYTHONPATH`, so a bind-mounted addon can
+import it regardless of load order.
+
+It matches on label boundaries — `*.example.com` covers `a.example.com` and
+`a.b.example.com`, never the `example.com` apex and never `evilexample.com` —
+normalises case, a trailing root dot and a `:port` suffix, and returns *which*
+pattern matched so a caller can keep per-entry state on top of it. A longer
+wildcard suffix beats a shorter one regardless of list order, so reordering a
+config file cannot change which rule applies. An uninterpretable pattern is
+skipped rather than raised on: a bad line in a deployment's allowlist must not
+be able to take the proxy down, and skipping denies rather than permits.
+
+**A wildcard is safe for credential injection only when the entire suffix is
+single-tenant.** The allowlist and an injection addon both match hosts with
+different blast radius: a too-wide allowlist entry means the agent can *reach*
+something it should not, a too-wide injection match means a live token is
+*handed* to whoever owns the name. `injection_wildcard_multitenant` fails on a
+known list — `workers.dev`, `pages.dev`, `myshopify.com`, `herokuapp.com`,
+`vercel.app`, `netlify.app`, `s3.amazonaws.com`, `blob.core.windows.net`,
+`github.io` — and `injection_wildcard` notes on every other wildcard. A note
+rather than a failure because `*.googleapis.com` is legitimate and now ships,
+and because the list will never be complete: the note is what covers the
+suffixes nobody thought of.
+
+**`PLAYBOOK.md` says where the injection model stops.** Everything in it
+assumed the proxy can read the request it is adding a header to, which has only
+been exercised against HTTP/1.1 clients. gRPC over HTTP/2 — Pub/Sub, Spanner,
+Firestore, Bigtable — is untested, and signature-based auth like AWS SigV4
+cannot be swapped at all. Both fail closed on an internal lab network, and the
+symptom is a resolution or TLS error rather than a permission error, which is
+the part that otherwise costs an afternoon.
+
+### Fixed
+
+**A cached test image made suites pass against code they could not contain.**
+`build_image` reused any existing tag, so adding `hostmatch.py` produced
+`ModuleNotFoundError` in every proxy suite — reported as "proxy did not become
+ready", which points nowhere near the cause. A stale image that still *starts*
+is the worse outcome: a pass against the wrong code. It now rebuilds when any
+file in the build context is newer than the image.
+
+**The shared Python strip helper mangled docstrings containing quotes.**
+`_inv_strip_py` matched a same-line docstring with `"""[^"]*"""`, which stops at
+the first quote character inside it — so a docstring quoting the anti-pattern it
+warns about survived the strip and read as code. Every addon here documents the
+pattern it must not use, so that is the house style, not an exotic case.
+
+### Upgrading
+
+Nothing is required, and no manual step is needed to stay safe. Two things a
+deployment may notice.
+
+**The new wildcard checks may report your own addons.** An addon that attaches
+a credential header and matches a wildcard host will produce a note on every
+`check-invariants.sh` / `check-drift.sh` run, or a failure if the suffix is on
+the multi-tenant list:
+
+```
+FAIL   injects a credential for a wildcard suffix anyone can register under
+note   injects a credential for a wildcard host suffix — is the whole suffix single-tenant?
+```
+
+The note is not a defect to silence. It asks whether one party holds every name
+under that suffix, and only you can answer it.
+
+**If you vendor `001_allowlist.py`, copy it from the tag you pin.** Since 1.7.0
+that addon does `import hostmatch`, which only exists in images built from
+1.7.0 or later — a newer copy on an older image fails to load, and the proxy is
+what fails, taking every destination with it. Neither example vendors it (it is
+opt-in), so this binds only deployments that copied it by hand.
+
+---
+
 ## 1.6.0 — 2026-08-08
 
 Two halves of the same subject: who decides how much authority the agent gets,

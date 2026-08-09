@@ -204,6 +204,24 @@ for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/a
   else ko "$f — binds a client-supplied header to a name it acts on" "$bad"; fi
 done
 
+suite "no addon injects a credential for a multi-tenant wildcard suffix"
+# An allowlist and an injection addon both match hosts, and a too-wide match
+# means different things: the lab reaches something it should not, versus a
+# live token handed to whoever owns the name. Only the second is checked here.
+#
+# The rule: a wildcard is safe for credential injection only when the entire
+# suffix is single-tenant. *.googleapis.com qualifies and #41 will ship it —
+# hence a note. *.workers.dev does not, and anyone can register one, so that
+# half fails. Every shipped addon matches exact hosts today, so both halves
+# should be silent; the planted cases live in 06-check-invariants.
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py; do
+  [ -f "$f" ] || continue
+  if bad=$(inv_injection_wildcard_multitenant "$f"); then
+    ok "$(basename "$f") — injects for no multi-tenant wildcard"
+  else ko "$f — injects a credential for a suffix anyone can register under" "$bad"; fi
+done
+
 suite "addons log a parsed endpoint, never a raw request path"
 # The trail is a plaintext file that observer serves over HTTP, and
 # mitmproxy's flow.request.path includes the query string. For a provider
@@ -407,6 +425,37 @@ for i in "${!EXAMPLE_COMPOSES[@]}"; do
   fi
 done
 
+suite "examples import hostmatch only when their pin can back it"
+# hostmatch.py entered the image at 1.7.0, so this is the audit.py trap one
+# release later: a vendored addon doing `import hostmatch` on an image built
+# from an earlier tag fails to load with ModuleNotFoundError, and the proxy is
+# what fails — every destination with it.
+#
+# Only the negative direction is asserted. Unlike audit.py, which every
+# provider file should be using once it can, hostmatch is for addons that
+# match a family of hosts; an addon matching two exact names has no use for
+# it and must not be pushed into importing it to satisfy a lint.
+#
+# Neither example vendors 001_allowlist.py today (it is opt-in, copied by
+# hand), so this currently guards the GCP addon #41 will add rather than
+# anything present — which is the point of writing it now.
+HOSTMATCH_MIN="1.7.0"
+for i in "${!EXAMPLE_COMPOSES[@]}"; do
+  c="${EXAMPLE_COMPOSES[$i]}"; dir="${EXAMPLE_DIRS[$i]}"
+  tag=$(grep -oE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
+  if [ -z "$tag" ]; then skip "$dir — no pinned tag found" ""; continue; fi
+  higher=$(printf '%s\n%s\n' "$HOSTMATCH_MIN" "$tag" | sort -V | tail -1)
+  if [ "$higher" = "$tag" ]; then
+    ok "$dir (pinned v$tag) may import hostmatch"
+    continue
+  fi
+  for f in "$dir"/proxy/*.py; do
+    [ -f "$f" ] || continue
+    check_not_contains "$f (pinned v$tag, below the v$HOSTMATCH_MIN hostmatch needs) does not import it" \
+      "$(cat "$f")" "import hostmatch"
+  done
+done
+
 # ---------------------------------------------------------------------------
 # Suite A — bank manifests are well-formed.
 #
@@ -520,7 +569,7 @@ for m in bank/*/provider.json; do
     q % 2 == 1 { ds = 1; next }
     { print line }
   ' "$addon" \
-    | grep -oE '"[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
+    | grep -oE '"\*?\.?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}"|'\''\*?\.?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}'\''' \
     | tr -d '"'\''' | sort -u)
   missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))
   extra=$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$actual"))

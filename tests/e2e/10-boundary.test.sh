@@ -34,10 +34,27 @@ check "/healthz reachable" "200" "$(lab_code "http://cred-gateway/healthz")"
 # 500, which is a broker problem — it must not read as "the whitelist is
 # broken". Whether the endpoints return anything usable is asserted below,
 # where the broker is the subject.
-check_ne "/github/credential is not denied" "403" \
-  "$(lab_code "http://cred-gateway/github/credential")"
-check_ne "/github/identity is not denied" "403" \
-  "$(lab_code "http://cred-gateway/github/identity")"
+#
+# Fetched ONCE each, here, and reused for every assertion below. cred-gateway
+# rate-limits these routes at 10r/m with burst 5 — a real control protecting
+# the broker, not a test artifact — and re-fetching per assertion spent the
+# whole budget, so 30-git's credential helper later received nginx's 503 page
+# and reported `invalid credential line: <html>`. Asserting repeatedly about
+# one response is also the more honest test: four assertions about four
+# different responses can all pass while no single response is correct.
+cred_code=$(lab_code "http://cred-gateway/github/credential")
+ident_code=$(lab_code "http://cred-gateway/github/identity")
+# Bodies, not printed: the credential body holds a live installation token,
+# which lab is entitled to and the terminal is not.
+cred_has=$(lab_sh "curl -s http://cred-gateway/github/credential > /tmp/cred.out; \
+                   grep -cE '^password=.+' /tmp/cred.out || true; \
+                   grep -cE '^username=.+' /tmp/cred.out || true; rm -f /tmp/cred.out")
+ident_has=$(lab_sh "curl -s http://cred-gateway/github/identity > /tmp/ident.out; \
+                    grep -cE '\"name\"' /tmp/ident.out || true; \
+                    grep -cE '\"email\"' /tmp/ident.out || true; rm -f /tmp/ident.out")
+
+check_ne "/github/credential is not denied" "403" "$cred_code"
+check_ne "/github/identity is not denied" "403" "$ident_code"
 
 for path in /github/token /anthropic/key /anthropic/cred /cloudflare/token /healthz/../github/token; do
   check "$path denied" "403" "$(lab_code "http://cred-gateway$path")"
@@ -50,17 +67,14 @@ suite "the endpoints that are allowed return something real"
 #
 # Deliberately assertion-by-shape: the body holds a live installation token,
 # which lab is entitled to (git needs it locally) but the terminal is not.
-have() { lab_sh "curl -s http://cred-gateway$1 | grep -cE '$2' || true"; }
+# Both responses were captured above, before the rate limit could bite.
+check "/github/credential returns 200" "200" "$cred_code"
+check "/github/identity returns 200" "200" "$ident_code"
 
-check "/github/credential returns 200" "200" \
-  "$(lab_code "http://cred-gateway/github/credential")"
-check "/github/identity returns 200" "200" \
-  "$(lab_code "http://cred-gateway/github/identity")"
-
-check "credential helper output is in git credential format" "1" "$(have /github/credential '^password=.+')"
-check "credential helper returns a username" "1" "$(have /github/credential '^username=.+')"
-check "identity returns a name" "1" "$(have /github/identity '\"name\"')"
-check "identity returns an email" "1" "$(have /github/identity '\"email\"')"
+check "credential helper output is in git credential format" "1" "$(echo "$cred_has" | sed -n 1p)"
+check "credential helper returns a username" "1" "$(echo "$cred_has" | sed -n 2p)"
+check "identity returns a name" "1" "$(echo "$ident_has" | sed -n 1p)"
+check "identity returns an email" "1" "$(echo "$ident_has" | sed -n 2p)"
 
 suite "lab holds no raw vendor credential"
 # The dummy values must survive: if either of these is a real key, the whole

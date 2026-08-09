@@ -88,10 +88,16 @@ if start_proxy PXA enforcing "$FIXTURES/allowlist"; then
   check "wildcard domain still enforces methods" "403" \
     "$(http_code "http://foo.cdn.test:8080/ping" -X POST $P)"
 
-  # A suffix match must not let `evilcdn.test` through on `*.cdn.test`.
-  # The addon compares with endswith(".cdn.test"), so this is a real guard.
+  # A suffix match must not let `evilcdn.test` through on `*.cdn.test`. Since
+  # 1.7.0 the comparison lives in hostmatch.matches() rather than in this
+  # addon, which is what makes it worth asserting here as well as in the unit
+  # tests: this is the caller proving it passes the patterns through intact.
   check "wildcard does not match a sibling domain" "403" \
     "$(http_code "http://evilcdn.test:8080/ping" $P)"
+  # The apex is not a subdomain. Neither host resolves on this network, which
+  # does not matter — the addon answers before DNS is consulted.
+  check "wildcard does not match the apex" "403" \
+    "$(http_code "http://cdn.test:8080/ping" $P)"
 
   # Internal hosts stay blocked by 000_policy even in permissive method terms.
   check "internal host still blocked when allowlist is active" "403" \

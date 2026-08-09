@@ -45,6 +45,7 @@ description.
 | GitHub | `api.github.com`, `uploads.github.com` | `/github/credential`, `/github/identity` | [`bank/github/`](bank/github/) |
 | Anthropic | `api.anthropic.com` | nothing | [`bank/anthropic/`](bank/anthropic/) |
 | Cloudflare | `api.cloudflare.com` | nothing | [`bank/cloudflare/`](bank/cloudflare/) |
+| GCP | `*.googleapis.com` | `/gcp/token` | [`bank/gcp/`](bank/gcp/) |
 
 Hosts, broker routes, env vars and secret files are **not** listed here — they
 are in each entry's `provider.json`, which is the thing the lint checks against
@@ -120,6 +121,67 @@ manifest precisely because exactly one of them is normally set.
   two deployments, not one deployment with a header.
 - **`CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy** satisfying `wrangler`'s
   "am I authenticated" check. Never replace it with a real token.
+
+### GCP
+
+- **The agent's authority is exactly the impersonated service account's IAM
+  roles.** This is the sentence to read twice. The broker holds an ADC file,
+  exchanges the user's refresh token for a user access token, and calls
+  `generateAccessToken` on the service account named by `GCP_SERVICE_ACCOUNT`;
+  what comes back can do whatever that SA can do, for an hour, and nothing
+  more. Choosing those roles narrowly is the deployment's job and is the only
+  thing bounding blast radius — exactly as a GitHub App's permissions bound
+  the installation token. A service account with `roles/owner` produces an
+  agent with `roles/owner`.
+- **Two credential shapes, and the choice is the deployment's.** Both put the
+  same short-lived token in front of the agent; they differ in what the broker
+  has to hold and how each fails.
+
+  | | `impersonated_service_account` | `service_account` (key file) |
+  |---|---|---|
+  | broker holds | the operator's refresh token | the SA's private key |
+  | expires | when the OAuth session does | never |
+  | if it leaks | revocable, visible in Google session management | silent and permanent until noticed |
+  | unattended | **may need periodic human re-login** | yes |
+
+  Impersonation is the better default: no key exists anywhere, and many
+  organisations forbid keys outright via
+  `constraints/iam.disableServiceAccountKeyCreation`. But its refresh token is
+  not immortal — a Google Workspace **Cloud session-length policy** expires it
+  on a schedule (commonly 16–24h), and an OAuth client left in "Testing"
+  publishing status expires it in 7 days. When that happens the broker stops
+  minting until a human runs `gcloud auth application-default login` again,
+  which is fatal for an agent that is supposed to run unattended. On a personal
+  Google account with no such policy it typically lasts indefinitely.
+
+  If your account is under a session policy and nobody is around to
+  re-authenticate, use a key file and keep the service account narrow. Point
+  `GCP_ADC_PATH` at either shape; the broker detects which it has.
+
+- **A bare `authorized_user` ADC is refused outright** — that is the operator's
+  own identity with no impersonation at all, which is the thing this provider
+  exists to avoid. `external_account` (federation from an outside IdP) is not
+  implemented, and is refused rather than half-attempted.
+- **Which service account is deployment configuration, not the agent's
+  choice.** `GCP_SERVICE_ACCOUNT` is set on both `proxy` and `broker`, and is
+  cross-checked against the impersonation URL inside the ADC file; a mismatch
+  is a 403 rather than a silent preference. Two identities means two
+  deployments.
+- **`CLOUDSDK_AUTH_ACCESS_TOKEN=proxy-injected` is a dummy**, the top of
+  `gcloud`'s credential priority list. The client libraries do not read it and
+  need an ADC file instead, which `lab/setup.sh` writes — also inert, an
+  `external_account` whose credential source is a script printing a fixed
+  dummy. Neither holds a secret. Never replace either with a real value.
+- **`gcloud` needs its own CA variable.** `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`
+  must point at the proxy CA; `gcloud` reads none of `REQUESTS_CA_BUNDLE`,
+  `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`, and fails with
+  `CERTIFICATE_VERIFY_FAILED` without it. It does honour `http_proxy` /
+  `https_proxy`, so no `CLOUDSDK_PROXY_*` settings are needed.
+- **`/gcp/token` is exposed through cred-gateway**, unlike Anthropic's and
+  Cloudflare's credential routes. It is there for tooling the proxy cannot
+  mediate, gRPC-based client libraries being the known case. It hands over a
+  real short-lived token, on the same terms as `/github/credential` — see the
+  first bullet for what that token can do.
 
 ## Generating a stack
 
@@ -201,6 +263,30 @@ being generated:
   deployments, which is honest — they are genuinely separate blast radii.
   This is the general form of the `pretty_host` rule above, and
   `scripts/check-invariants.sh` enforces it (`header_selector`).
+- **Use `hostmatch` for host matching, and wildcard only a single-tenant
+  suffix.** `import hostmatch` (baked into the image at `/opt/agent-proxy`,
+  like `audit`) and call `hostmatch.matches(flow.request.host, [...])` rather
+  than writing `endswith` or `in` by hand. `"api.example.com" in host` is true
+  for `api.example.com.evil.test`; a bare `host.endswith("example.com")` is
+  true for `evilexample.com`. `hostmatch` matches on label boundaries, so
+  `*.example.com` covers `a.example.com` but not the `example.com` apex and
+  not `evilexample.com`.
+
+  A wildcard entry is safe **only when one party holds every name under the
+  suffix**, because a credential injected for `*.suffix` goes to whoever owns
+  the name it was aimed at. `*.googleapis.com` qualifies. These do not, and a
+  wildcard for any of them is a direct handover to whoever registered a
+  subdomain: `*.workers.dev`, `*.pages.dev`, `*.myshopify.com`,
+  `*.herokuapp.com`, `*.vercel.app`, `*.netlify.app`, `*.s3.amazonaws.com`,
+  `*.blob.core.windows.net`, `*.github.io`.
+
+  Note the asymmetry with the egress allowlist, which also matches hosts: a
+  too-wide allowlist entry means the agent can *reach* something it should
+  not, while a too-wide injection match means a live token is *handed* to it.
+  `check-invariants.sh` fails on the listed suffixes
+  (`injection_wildcard_multitenant`) and notes on every other wildcard
+  (`injection_wildcard`) — the list will never be complete, and the note is
+  what covers the suffixes nobody thought of.
 - `cred-gateway` snippets must use exact-match `location = /path` blocks,
   never a prefix match — a prefix like `location /github/` exposes sibling
   routes that must stay broker-only.
@@ -230,6 +316,36 @@ being generated:
   `default` network ends up containing only the two of them, since every
   other service declares an explicit `networks:` list). Do not "fix" this
   by adding one.
+
+### What the proxy has not been shown to mediate
+
+Everything above assumes the proxy can read the request it is asked to add a
+credential to. That has only ever been exercised against clients speaking
+**HTTP/1.1** — `gh`, `wrangler`, `curl`, the Anthropic SDK, and the Google
+clients measured in #40. Two categories are known to sit outside that, and
+neither is implemented today:
+
+- **gRPC over HTTP/2 is untested.** A large part of Google Cloud speaks it —
+  Pub/Sub, Spanner, Firestore, Bigtable. mitmproxy speaks HTTP/2 and gRPC
+  metadata *is* HTTP/2 headers, so injection ought to work, but nobody has
+  run it. Do not write an addon for a gRPC-based API and assume the pattern
+  in this playbook carries over; there is no evidence yet that it does.
+  Tracked as its own spike, along with the question of which trust store
+  gRPC uses — it bundles its own roots rather than reading
+  `REQUESTS_CA_BUNDLE`, so it likely needs `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`
+  set as well.
+- **Anything that authenticates by signing rather than by attaching a
+  token.** AWS SigV4 covers `host` and the date in the signature, so the
+  proxy cannot swap a value — it would have to recompute the signature over
+  the final request, which means holding the secret key in the proxy process
+  rather than a short-lived token. That is a different trust posture from
+  every provider in the bank, and is deliberately not attempted here.
+
+Both fail *closed* rather than open: on an `internal: true` lab network a
+client the proxy cannot mediate does not reach the vendor unauthenticated, it
+does not reach the vendor at all. The symptom is a name-resolution or TLS
+error rather than a permission error, which is worth knowing before you spend
+an afternoon on the credential path.
 
 ### Audit logging, `observer` and `log-rotator`
 
@@ -478,7 +594,11 @@ agent's own credential to the provider, which is the opposite of the
 point. Cache with a short TTL. Pick it
 up with `docker compose up -d --force-recreate proxy` — `entrypoint.sh`
 auto-discovers `*.py` at startup. Use the baked-in `audit.py`
-(`import audit; audit.log_event(...)`) the same way.
+(`import audit; audit.log_event(...)`) and `hostmatch.py`
+(`import hostmatch; hostmatch.matches(flow.request.host, [...])`) the same
+way — both are on `PYTHONPATH` regardless of load order. If the provider's
+hosts are a family rather than a fixed pair, read the wildcard rule in the
+generation constraints before reaching for `*.`.
 
 **Cred-gateway** — only if lab tooling needs raw access to something the
 broker/proxy path doesn't cover (rare). Add an exact-match snippet to the
@@ -588,7 +708,7 @@ paperwork.
 
    Note what this is *not*: the proxy image does not ship these addons and
    the mount does not shadow them. `stack/proxy/Dockerfile` bakes in only
-   `entrypoint.sh` and `audit.py`; `/addons` exists solely because the
+   `entrypoint.sh`, `audit.py` and `hostmatch.py`; `/addons` exists solely because the
    deployment mounts it, and `entrypoint.sh` loads whatever `*.py` it finds
    there. So a policy addon that was never vendored isn't a stale copy
    hiding under a mount — it is a control that does not exist, with a

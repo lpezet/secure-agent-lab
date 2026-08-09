@@ -37,6 +37,25 @@ INV_DENY_PATHS="/github/token /anthropic/cred /anthropic/key /cloudflare/token"
 INV_PLACEHOLDER_VARS="GH_TOKEN CLOUDFLARE_API_TOKEN ANTHROPIC_API_KEY"
 INV_PLACEHOLDER_VALUE="proxy-injected"
 
+# Suffixes anyone can register a name under. A credential injected for
+# `*.<suffix>` is handed to whoever registered the subdomain it was aimed at,
+# which is a direct handover rather than a widened match.
+#
+# The list will never be complete, and that is why the wildcard check has two
+# halves: this list is the `fail`, and every other wildcard gets a `note`
+# pointing at the single-tenant rule. A clean scan is not a pass — see the
+# header. Contrast `*.googleapis.com`, where Google holds every name beneath
+# the suffix, which is the case the note exists to permit.
+INV_MULTITENANT_SUFFIXES='workers.dev
+pages.dev
+myshopify.com
+herokuapp.com
+vercel.app
+netlify.app
+s3.amazonaws.com
+blob.core.windows.net
+github.io'
+
 # Credential shapes. Length-bounded so `.env.example` stubs (sk-ant-…, ghp_xxx)
 # do not trip while a real key still would.
 INV_CRED_PATTERNS='sk-ant-[A-Za-z0-9_-]{20,}
@@ -54,6 +73,8 @@ BEGIN OPENSSH PRIVATE KEY'
 # worse than one that is slightly ugly.
 _INV_SQ=$(printf '\047')   # '
 _INV_BT=$(printf '\140')   # `
+_INV_NL='
+'
 
 # _inv_strip_py <file> — python source with comments and docstrings removed.
 # Every shipped addon explains these anti-patterns in its own prose; without
@@ -63,7 +84,13 @@ _inv_strip_py() {
     { line = $0; sub(/#.*$/, "", line) }
     # Same-line docstrings close as fast as they open, so the block counter
     # below never sees them. Drop them first.
-    { gsub(/"""[^"]*"""/, "", line); gsub(/\x27\x27\x27[^\x27]*\x27\x27\x27/, "", line) }
+    #
+    # Greedy .* between the delimiters, not [^"]*: a docstring quoting the
+    # anti-pattern it warns about — """never write ["*.workers.dev"] here""" —
+    # contains quote characters, and the excluding form stops at the first one
+    # and leaves the line looking like code. Every addon here documents the
+    # pattern it must not use, so that is the common case, not the exotic one.
+    { sub(/""".*"""/, "", line); sub(/\x27\x27\x27.*\x27\x27\x27/, "", line) }
     { q = gsub(/"""/, "&", line) + gsub(/\x27\x27\x27/, "&", line) }
     ds  { if (q % 2 == 1) ds = 0; print ""; next }
     q % 2 == 1 { ds = 1; print ""; next }
@@ -151,6 +178,65 @@ inv_exception_quoted() {
 inv_header_selector() {
   _inv_report "$1" "$(_inv_strip_py "$1" \
     | grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*flow\.request\.headers\.(get|pop)\(')"
+}
+
+# _inv_injection_wildcards <file> — wildcard host literals, but only in a file
+# that also attaches a credential header.
+#
+# The scoping is the point. An allowlist and an injection addon both match
+# hosts, and they are asking different questions:
+#
+#   may the lab REACH this host?      too wide → it talks to something it should not
+#   should a CREDENTIAL be attached?  too wide → a live token goes to whoever owns it
+#
+# Only the second is this check's business, so a deployment writing its own
+# allowlist with `*.cdn.example.com` in it is not told off for the entry that
+# addon exists to hold. 001_allowlist.py reads its patterns from a file and
+# carries no literals, so it stays clean either way.
+_inv_injection_wildcards() {
+  local stripped
+  stripped=$(_inv_strip_py "$1" 2>/dev/null) || return 0
+  printf '%s\n' "$stripped" \
+    | grep -qE 'flow\.request\.headers[[:space:]]*\[[^]]*\][[:space:]]*=|flow\.request\.headers\.update\(' \
+    || return 0
+  printf '%s\n' "$stripped" | grep -nE \
+    "\"\\*\\.[A-Za-z0-9][A-Za-z0-9.-]*\\.[A-Za-z]{2,}\"|${_INV_SQ}\\*\\.[A-Za-z0-9][A-Za-z0-9.-]*\\.[A-Za-z]{2,}${_INV_SQ}"
+}
+
+# _inv_multitenant_filter keep|drop — partition wildcard findings by the list.
+# Matches the literal ending at the suffix, so `*.workers.dev` is caught and
+# `*.mine.workers.dev` is not: the second is single-tenant if you hold `mine`.
+_inv_multitenant_filter() {
+  local pats="" s
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    pats="$pats*.$s\"$_INV_NL*.$s$_INV_SQ$_INV_NL"
+  done <<EOF
+$INV_MULTITENANT_SUFFIXES
+EOF
+  if [ "$1" = keep ]; then
+    grep -F -f <(printf '%s' "$pats") || true
+  else
+    grep -F -v -f <(printf '%s' "$pats") || true
+  fi
+}
+
+# A wildcard is safe for credential injection only when the entire suffix is
+# single-tenant — one party holds every name under it. `*.googleapis.com`
+# qualifies; `*.workers.dev` does not, and injecting for it hands a live token
+# to whoever registered the subdomain.
+#
+# Deliberately a note, not a failure: legitimate wildcards exist and #41 ships
+# one. What a note cannot do is stay silent about the suffixes nobody thought
+# to list, which is the honest shape given a hardcoded list.
+inv_injection_wildcard() {
+  _inv_report "$1" "$(_inv_injection_wildcards "$1" | _inv_multitenant_filter drop)"
+}
+
+# The same finding where the suffix is known to be multi-tenant. That is not a
+# judgment call, so it fails.
+inv_injection_wildcard_multitenant() {
+  _inv_report "$1" "$(_inv_injection_wildcards "$1" | _inv_multitenant_filter keep)"
 }
 
 # git push/pull to github.com authenticates through the credential helper, not
@@ -303,6 +389,8 @@ INV_REGISTRY='raw_path_logged|fail|proxy_py|logs a raw request path, query strin
 raw_path_split|fail|proxy_py|splits a raw path on "/", so the last segment holds the query string
 pretty_host|fail|proxy_py|decides on the client-supplied Host header
 header_selector|fail|proxy_py|binds a client-supplied request header to a name the addon acts on
+injection_wildcard_multitenant|fail|proxy_py|injects a credential for a wildcard suffix anyone can register under
+injection_wildcard|note|proxy_py|injects a credential for a wildcard host suffix — is the whole suffix single-tenant?
 github_com_matched|fail|proxy_py|matches github.com, which the credential helper owns
 exception_quoted|fail|proxy_py broker_js|audit event quotes an exception beyond .code/.name
 location_prefix|fail|gateway_conf|prefix-match location exposes every route beneath it

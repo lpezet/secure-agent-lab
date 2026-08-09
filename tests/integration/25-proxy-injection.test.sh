@@ -53,6 +53,10 @@ server {
   # Echoes the requested profile back inside the token, so the injected
   # Authorization header reveals which profile the addon actually asked for.
   location = /cloudflare/token  { return 200 '{"token":"$MARKER-\$arg_profile"}'; }
+  # Echoes the requested service account back inside the token, the same trick
+  # as cloudflare's profile: the injected Authorization then reveals which
+  # identity the addon actually asked the broker for.
+  location = /gcp/token         { return 200 '{"token":"$MARKER-\$arg_service_account"}'; }
   location / { return 404 '{"error":"no such provider route"}'; }
 }
 EOF
@@ -71,6 +75,9 @@ EC="$RUN_ID-echo"
 docker run -d --name "$EC" --network "$NET" \
   --network-alias api.github.com --network-alias api.anthropic.com \
   --network-alias api.cloudflare.com --network-alias attacker-host \
+  --network-alias storage.googleapis.com --network-alias sts.googleapis.com \
+  --network-alias oauth2.googleapis.com --network-alias evilgoogleapis.com \
+  --network-alias googleapis.com \
   -v "/tmp/$ECHO_CONF:/etc/nginx/conf.d/default.conf:ro" nginx:alpine >/dev/null
 track_container "$EC"
 
@@ -187,6 +194,93 @@ if run_proxy cloudflare-profile "$DC_ADDONS/030_cloudflare.py"; then
 else
   ko "cloudflare-profile proxy did not start" \
      "$(docker logs "$RUN_ID-cloudflare-profile" 2>&1 | tail -20)"
+fi
+unset PROXY_ENV
+
+# ------------------------------------------------------------------------ gcp
+
+suite "gcp.py — a wildcard host family, matched on label boundaries"
+# The first addon in the bank matching a wildcard rather than a fixed pair.
+# *.googleapis.com is legitimate because Google holds every name beneath it —
+# the single-tenant test from #39 — but a suffix match written by hand is
+# exactly how evilexample.com slips through, so the boundaries are asserted
+# here against the real addon and not only in hostmatch's unit tests.
+PROXY_ENV="-e GCP_SERVICE_ACCOUNT=dev-agent@example.iam.gserviceaccount.com"
+if run_proxy gcp bank/gcp/proxy/gcp.py; then
+  P="--proxy http://$RUN_ID-gcp:8080"
+
+  body=$(http_body "http://storage.googleapis.com:8080/storage/v1/b/x/o" $P)
+  check_contains "token injected for a googleapis subdomain" "$body" "$MARKER"
+
+  # The apex is not a subdomain. Nothing in the stack should be talking to it,
+  # and the wildcard must not cover it.
+  body=$(http_body "http://googleapis.com:8080/x" $P)
+  check_not_contains "the apex does not match the wildcard" "$body" "$MARKER"
+
+  # The whole point of the leading dot. A registrar-adjacent name that merely
+  # ends in the same letters must not collect a live token.
+  body=$(http_body "http://evilgoogleapis.com:8080/x" $P)
+  check_not_contains "evilgoogleapis.com does not match" "$body" "$MARKER"
+
+  # REGRESSION, the one every provider must carry: pretty_host prefers the
+  # client-supplied Host header, so this is the shape that mailed the key to
+  # whoever asked.
+  body=$(http_body "http://attacker-host:8080/x" -H "Host: storage.googleapis.com" $P)
+  check_not_contains "spoofed Host does NOT leak the token" "$body" "$MARKER"
+
+  # Which identity is deployment configuration. The addon passes its own
+  # configured value; the stub echoes back whatever it was asked for.
+  body=$(http_body "http://storage.googleapis.com:8080/x" $P)
+  # %40 not @: the addon passes the SA as a query param, so nginx echoes it
+  # back percent-encoded. Asserting the encoded form keeps this checking what
+  # crossed the wire rather than what we hoped it would look like.
+  check_contains "the configured service account is what gets requested" \
+    "$body" "$MARKER-dev-agent%40example.iam.gserviceaccount.com"
+
+  # Whatever the client sent is replaced, not appended to.
+  body=$(http_body "http://storage.googleapis.com:8080/x" \
+                   -H "Authorization: Bearer CLIENT-OWN-TOKEN" $P)
+  check_not_contains "client auth is stripped, not forwarded" "$body" "CLIENT-OWN-TOKEN"
+  check_contains "and replaced with the injected token" "$body" "$MARKER"
+else
+  ko "gcp proxy did not start" "$(docker logs "$RUN_ID-gcp" 2>&1 | tail -20)"
+fi
+
+suite "gcp.py — the token exchange is answered, not forwarded"
+# A client library will not call an API until its credential chain produces a
+# token. The addon answers that exchange itself with the inert placeholder, so
+# no exchange reaches Google and the value the client ends up holding is
+# worthless anywhere else. If this ever starts returning the real token, the
+# lab is holding a live GCP credential on the proxied path — which is a design
+# change, not an optimisation.
+if [ -n "${RUN_ID:-}" ] && docker inspect "$RUN_ID-gcp" >/dev/null 2>&1; then
+  P="--proxy http://$RUN_ID-gcp:8080"
+
+  body=$(http_body "http://sts.googleapis.com:8080/v1/token" -X POST $P)
+  check_contains "the exchange returns an access_token" "$body" "access_token"
+  check_contains "and it is the inert placeholder" "$body" "proxy-injected"
+  check_not_contains "the real token is never handed to the client" "$body" "$MARKER"
+  # Answered locally means the echo server never saw it.
+  check_not_contains "the exchange never reached the destination" "$body" "RECEIVED-BY="
+
+  # oauth2.googleapis.com is the other endpoint the chain can end at.
+  body=$(http_body "http://oauth2.googleapis.com:8080/token" -X POST $P)
+  check_contains "oauth2 token endpoint is answered too" "$body" "proxy-injected"
+
+  # A non-token path on a token host is an ordinary API call and must be
+  # injected into rather than answered.
+  body=$(http_body "http://sts.googleapis.com:8080/v1/something-else" $P)
+  check_contains "a non-token path on the same host is injected, not answered" \
+    "$body" "$MARKER"
+
+  # /tokeninfo starts with /token. A prefix test would answer it with the
+  # inert placeholder, so a caller asking "what is this credential" would be
+  # told about the wrong one — wrongly, and silently.
+  body=$(http_body "http://oauth2.googleapis.com:8080/tokeninfo" $P)
+  check_contains "/tokeninfo is an API, not the token endpoint" "$body" "$MARKER"
+  check_not_contains "and is not answered locally" "$body" "proxy-injected"
+else
+  ko "gcp proxy unavailable for the token-exchange suite" ""
 fi
 unset PROXY_ENV
 

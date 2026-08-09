@@ -23,7 +23,49 @@ else
   G=''; R=''; Y=''; B=''; N=''
 fi
 
+# ----------------------------------------------------------------- subcommands
+#
+# `setup <name>` runs a one-time provisioning script instead of the suites.
+# Dispatched here rather than implemented here: run.sh is about running tests,
+# and gcloud logic in it would make that less true with every provider added.
+if [ "${1:-}" = "setup" ]; then
+  shift
+  name="${1:-}"; shift 2>/dev/null || true
+  [ -n "$name" ] || { echo "usage: run.sh setup <provider> [--yes|--teardown]" >&2; exit 2; }
+  script="$E2E_DIR/setup/$name.sh"
+  [ -f "$script" ] || { echo "no setup script for '$name' (looked for $script)" >&2; exit 2; }
+  exec bash "$script" "$@"
+fi
+
 # ------------------------------------------------------------------ preflight
+
+# Which suites were asked for, and therefore which credentials this run needs.
+# Selecting first matters: demanding a GitHub App from someone running only
+# `tests/run.sh e2e 40` would skip the tier over a credential nothing in it
+# touches. Every suite also self-skips when its own inputs are missing, so this
+# table degrades to a skip rather than a false pass if it drifts.
+files=()
+if [ $# -gt 0 ]; then
+  for pat in "$@"; do
+    for f in "$E2E_DIR/$pat"*.test.sh; do [ -f "$f" ] && files+=("$f"); done
+  done
+else
+  for f in "$E2E_DIR"/*.test.sh; do [ -f "$f" ] && files+=("$f"); done
+fi
+if [ "${#files[@]}" -eq 0 ]; then
+  echo "no test files matched" >&2
+  exit 2
+fi
+
+NEEDS_GITHUB=0 NEEDS_ANTHROPIC=0
+for f in "${files[@]}"; do
+  case "$(basename "$f")" in
+    40-gcp.test.sh)   ;;                                  # neither
+    30-git.test.sh)   NEEDS_GITHUB=1 ;;                   # GitHub only
+    *)                NEEDS_GITHUB=1; NEEDS_ANTHROPIC=1 ;;
+  esac
+done
+
 
 : "${AGENT_CREDS_DIR:=$HOME/.config/agent-creds-e2e}"
 export AGENT_CREDS_DIR
@@ -47,17 +89,29 @@ if [ "$(cd "$AGENT_CREDS_DIR" 2>/dev/null && pwd)" = "$(cd "$PROD_CREDS" 2>/dev/
 fi
 
 [ -d "$AGENT_CREDS_DIR" ] || skip_tier "no credential directory at $AGENT_CREDS_DIR"
-[ -f "$AGENT_CREDS_DIR/github-app.pem" ] || skip_tier "no github-app.pem in $AGENT_CREDS_DIR"
 [ -f "$E2E_DIR/.env" ] || skip_tier "no tests/e2e/.env (copy .env.example and fill it in)"
 
 # shellcheck disable=SC1091
 set -a; . "$E2E_DIR/.env"; set +a
 
-for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
-  [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
-done
-if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
-  skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
+if [ "$NEEDS_GITHUB" = 1 ]; then
+  [ -f "$AGENT_CREDS_DIR/github-app.pem" ] || skip_tier "no github-app.pem in $AGENT_CREDS_DIR"
+  for v in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID; do
+    [ -n "${!v:-}" ] || skip_tier "$v is empty in tests/e2e/.env"
+  done
+fi
+if [ "$NEEDS_ANTHROPIC" = 1 ]; then
+  if [ ! -f "$AGENT_CREDS_DIR/anthropic.key" ] && [ ! -f "$AGENT_CREDS_DIR/anthropic-auth.token" ]; then
+    skip_tier "no anthropic.key or anthropic-auth.token in $AGENT_CREDS_DIR"
+  fi
+fi
+if [ "$NEEDS_GITHUB" = 0 ] || [ "$NEEDS_ANTHROPIC" = 0 ]; then
+  # Every provider reads its credential lazily, so the broker is healthy
+  # without the ones this run does not use — right up until something asks it
+  # for a token, which by construction nothing here does.
+  printf '%spartial run%s — needs GitHub: %s, needs Anthropic: %s\n' \
+    "$Y" "$N" "$([ "$NEEDS_GITHUB" = 1 ] && echo yes || echo no)" \
+    "$([ "$NEEDS_ANTHROPIC" = 1 ] && echo yes || echo no)"
 fi
 
 if ! docker version >/dev/null 2>&1; then
@@ -79,6 +133,34 @@ teardown() {
   exit $rc
 }
 trap teardown EXIT INT TERM
+
+# ------------------------------------------------------------------- staging
+#
+# The stack under test is assembled here rather than bind-mounted straight out
+# of examples/claude-code, because the GCP entry is not in that example — it is
+# pinned to v1.2.0, below the image this entry needs — and docker cannot create
+# a mountpoint for a single file inside a directory that is itself a read-only
+# bind mount. Mounting bank/gcp/broker/gcp.js at /app/providers/gcp.js fails
+# with "read-only file system" for exactly that reason.
+#
+# Rebuilt from scratch on every run, so it is a copy that cannot drift: change
+# examples/claude-code or bank/gcp and the next run picks it up.
+STAGE="$E2E_DIR/.stage"
+printf '%s── assembling the deployment ──%s\n' "$B" "$N"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"/{broker,proxy,cred-gateway}
+cp "$REPO_ROOT"/examples/claude-code/broker/*.js        "$STAGE/broker/"
+cp "$REPO_ROOT"/examples/claude-code/proxy/*.py         "$STAGE/proxy/"
+cp "$REPO_ROOT"/examples/claude-code/cred-gateway/*.conf "$STAGE/cred-gateway/"
+# GCP comes from the bank. 040_ puts it in the provider band, after the
+# example's own addons and well clear of 000_policy.py.
+cp "$REPO_ROOT/bank/gcp/broker/gcp.js"        "$STAGE/broker/gcp.js"
+cp "$REPO_ROOT/bank/gcp/proxy/gcp.py"         "$STAGE/proxy/040_gcp.py"
+cp "$REPO_ROOT/bank/gcp/cred-gateway/gcp.conf" "$STAGE/cred-gateway/gcp.conf"
+printf '  %d provider(s), %d addon(s), %d snippet(s)\n' \
+  "$(find "$STAGE/broker" -name '*.js' | wc -l)" \
+  "$(find "$STAGE/proxy" -name '*.py' | wc -l)" \
+  "$(find "$STAGE/cred-gateway" -name '*.conf' | wc -l)"
 
 printf '%s── building ──%s\n' "$B" "$N"
 # stack/lab is the real base image; tests/e2e/lab extends it with gh. Building
@@ -110,23 +192,25 @@ printf '%s── preparing lab container ──%s\n' "$B" "$N"
 
 # ------------------------------------------------------------------- run suites
 
-files=()
-if [ $# -gt 0 ]; then
-  for pat in "$@"; do
-    for f in "$E2E_DIR/$pat"*.test.sh; do [ -f "$f" ] && files+=("$f"); done
-  done
-else
-  for f in "$E2E_DIR"/*.test.sh; do [ -f "$f" ] && files+=("$f"); done
-fi
-if [ "${#files[@]}" -eq 0 ]; then
-  echo "no test files matched" >&2
-  exit 2
-fi
+# cred-gateway rate-limits the credential routes at 10r/m, burst 5 — a real
+# control protecting the broker, and one a normal deployment never approaches.
+# Suites run back to back do: 10-boundary spends its budget, and 30-git's
+# credential helper then receives nginx's 503 page and reports `invalid
+# credential line: <html>`, which looks like a credential-helper bug and is
+# not one. Let the bucket refill between suites rather than raising the limit,
+# so what runs here stays the configuration that ships.
+: "${E2E_SUITE_PAUSE:=20}"
 
 failed=()
 started=$SECONDS
+first=1
 for f in "${files[@]}"; do
   name="$(basename "$f" .test.sh)"
+  if [ "$first" = 0 ] && [ "$E2E_SUITE_PAUSE" -gt 0 ]; then
+    printf '\n%s   … %ss for cred-gateway'"'"'s rate limiter to refill%s\n' "$Y" "$E2E_SUITE_PAUSE" "$N"
+    sleep "$E2E_SUITE_PAUSE"
+  fi
+  first=0
   printf '\n%s┏━ %s %s\n' "$B" "$name" "$N"
   if bash "$f"; then
     printf '%s┗━ %s ok%s\n' "$G" "$name" "$N"
