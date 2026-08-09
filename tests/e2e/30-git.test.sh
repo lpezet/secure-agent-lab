@@ -41,8 +41,11 @@ fi
 # scratch branch would be unremovable, and this suite would leave a permanent
 # mark on the repository it was pointed at. Refuse to start rather than make a
 # mess that has to be cleaned up by hand.
-empty=$(lab_sh "gh api repos/$REPO --jq .size 2>/dev/null")
-if [ "$empty" = "0" ]; then
+# Branch count, not `.size`: that field is the repository size in KB and a repo
+# holding one README rounds to 0, which would skip this suite on a perfectly
+# good target. An empty repo is one with no branches.
+branches=$(lab_sh "gh api repos/$REPO/branches --jq 'length' 2>/dev/null")
+if [ "${branches:-0}" = "0" ]; then
   suite "clone and push"
   skip "$REPO has no commits" \
     "push it an initial commit first — the first branch pushed to an empty repo becomes the default, and a default branch cannot be deleted"
