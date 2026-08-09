@@ -255,6 +255,36 @@ being generated:
   other service declares an explicit `networks:` list). Do not "fix" this
   by adding one.
 
+### What the proxy has not been shown to mediate
+
+Everything above assumes the proxy can read the request it is asked to add a
+credential to. That has only ever been exercised against clients speaking
+**HTTP/1.1** — `gh`, `wrangler`, `curl`, the Anthropic SDK, and the Google
+clients measured in #40. Two categories are known to sit outside that, and
+neither is implemented today:
+
+- **gRPC over HTTP/2 is untested.** A large part of Google Cloud speaks it —
+  Pub/Sub, Spanner, Firestore, Bigtable. mitmproxy speaks HTTP/2 and gRPC
+  metadata *is* HTTP/2 headers, so injection ought to work, but nobody has
+  run it. Do not write an addon for a gRPC-based API and assume the pattern
+  in this playbook carries over; there is no evidence yet that it does.
+  Tracked as its own spike, along with the question of which trust store
+  gRPC uses — it bundles its own roots rather than reading
+  `REQUESTS_CA_BUNDLE`, so it likely needs `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`
+  set as well.
+- **Anything that authenticates by signing rather than by attaching a
+  token.** AWS SigV4 covers `host` and the date in the signature, so the
+  proxy cannot swap a value — it would have to recompute the signature over
+  the final request, which means holding the secret key in the proxy process
+  rather than a short-lived token. That is a different trust posture from
+  every provider in the bank, and is deliberately not attempted here.
+
+Both fail *closed* rather than open: on an `internal: true` lab network a
+client the proxy cannot mediate does not reach the vendor unauthenticated, it
+does not reach the vendor at all. The symptom is a name-resolution or TLS
+error rather than a permission error, which is worth knowing before you spend
+an afternoon on the credential path.
+
 ### Audit logging, `observer` and `log-rotator`
 
 Only if the end-user asked for it. All three services write JSONL to one
