@@ -106,9 +106,18 @@ check_contains "with the inert placeholder" "$body" "proxy-injected"
 check_no_secret "and never a real token" "$body" "${SECRET_PATTERNS[@]}"
 
 suite "the audit trail describes the authority, never the credential"
-trail=$(svc_logs broker)
-check_contains "the broker recorded an issue for gcp" "$trail" "gcp"
-check_contains "naming the service account it issued for" "$trail" "$GCP_SERVICE_ACCOUNT"
-check_no_secret "no credential shape reached the log" "$trail" "${SECRET_PATTERNS[@]}"
+# The trail, not stdout. These asserted on `docker compose logs broker` until
+# #51 wired an audit-logs volume into this tier, which worked but checked the
+# wrong surface: stdout is not what observer serves, and the two carry
+# deliberately different detail.
+trail=$(audit_trail broker)
+check "an issue was recorded for gcp" "1" "$(audit_has "$trail" provider gcp)"
+check "naming the service account it issued for" "1" \
+  "$(audit_has "$trail" service_account "$GCP_SERVICE_ACCOUNT")"
+check_contains "and when it expires" "$trail" '"expires_at"'
+# Which credential shape produced it — two deployments issuing the same
+# authority by different means have different failure modes.
+check "recording the credential shape" "1" "$(audit_has "$trail" source impersonation)"
+check_no_secret "no credential shape reached the trail" "$trail" "${SECRET_PATTERNS[@]}"
 
 finish

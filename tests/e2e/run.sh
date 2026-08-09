@@ -62,6 +62,7 @@ for f in "${files[@]}"; do
   case "$(basename "$f")" in
     40-gcp.test.sh)   ;;                                  # neither
     30-git.test.sh)   NEEDS_GITHUB=1 ;;                   # GitHub only
+    50-audit.test.sh) NEEDS_GITHUB=1 ;;                   # provokes GitHub events
     *)                NEEDS_GITHUB=1; NEEDS_ANTHROPIC=1 ;;
   esac
 done
