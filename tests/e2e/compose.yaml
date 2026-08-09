@@ -21,11 +21,17 @@ services:
       # Dedicated creds directory — never the one a real agent uses. See README.
       - ${AGENT_CREDS_DIR:?set AGENT_CREDS_DIR (tests/e2e/run.sh does this)}:/secrets:ro
       - ../../examples/claude-code/broker:/app/providers:ro
+      # GCP comes from the bank rather than the example: examples/claude-code
+      # is pinned to v1.2.0, below the 1.7.0 image this entry needs. Mounted
+      # unconditionally — the provider reads its config lazily, so with no
+      # gcp-adc.json present the route simply 502s and nothing else notices.
+      - ../../bank/gcp/broker/gcp.js:/app/providers/gcp.js:ro
     env_file: .env
     environment:
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
       ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
       ANTHROPIC_AUTH_TOKEN_PATH: /secrets/anthropic-auth.token
+      GCP_ADC_PATH: /secrets/gcp-adc.json
     networks: [secure]
     healthcheck:
       test:
@@ -47,7 +53,9 @@ services:
         condition: service_healthy
     volumes:
       - ../../examples/claude-code/proxy:/addons:ro
+      - ../../bank/gcp/proxy/gcp.py:/addons/040_gcp.py:ro
       - proxy-certs:/home/mitmproxy/.mitmproxy
+    env_file: .env
     environment:
       BROKER_URL: http://broker:8080
       PYTHONUNBUFFERED: "1"
@@ -67,6 +75,7 @@ services:
         condition: service_healthy
     volumes:
       - ../../examples/claude-code/cred-gateway:/etc/nginx/gateway.d:ro
+      - ../../bank/gcp/cred-gateway/gcp.conf:/etc/nginx/gateway.d/gcp.conf:ro
     networks: [secure, lab]
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
@@ -110,6 +119,9 @@ services:
       # sees a real credential in this container, the boundary has failed.
       ANTHROPIC_API_KEY: proxy-injected
       GH_TOKEN: proxy-injected
+      CLOUDSDK_AUTH_ACCESS_TOKEN: proxy-injected
+      CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE: /proxy-certs/mitmproxy-ca-cert.pem
+      GCP_TOKEN_URL: http://cred-gateway/gcp/token
       E2E_TEST_REPO: ${E2E_TEST_REPO:-}
     # No devcontainer lifecycle here, so hold the container open ourselves.
     command: sleep infinity

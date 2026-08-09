@@ -1,0 +1,32 @@
+{
+  "name": "gcp",
+  "summary": "Short-lived GCP access token for an impersonated service account, from an ADC file holding no service-account key",
+  "min_stack": "1.7.0",
+  "load_band": "provider",
+  "hosts": ["*.googleapis.com", "sts.googleapis.com", "oauth2.googleapis.com"],
+  "secrets": [
+    {
+      "env": "GCP_ADC_PATH",
+      "file": "gcp-adc.json",
+      "prompt": "GCP application default credentials JSON (impersonated_service_account preferred)",
+      "multiline": true
+    }
+  ],
+  "config": [
+    {
+      "env": "GCP_SERVICE_ACCOUNT",
+      "prompt": "Service account this deployment impersonates",
+      "help": "Full email, e.g. dev-ai-agent@my-project.iam.gserviceaccount.com. Cross-checked against the ADC file's impersonation URL: a mismatch is refused rather than silently preferred. Deployment configuration — the lab container does not choose which identity it gets, so two identities means two deployments."
+    }
+  ],
+  "broker_routes": [
+    { "path": "/gcp/token", "exposed": true }
+  ],
+  "lab_env": {
+    "CLOUDSDK_AUTH_ACCESS_TOKEN": "proxy-injected",
+    "GOOGLE_APPLICATION_CREDENTIALS": "/home/node/.config/gcp/inert-adc.json",
+    "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES": "1",
+    "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE": "/proxy-certs/mitmproxy-ca-cert.pem"
+  },
+  "lab_setup": "lab/setup.sh"
+}

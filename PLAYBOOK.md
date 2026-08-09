@@ -121,6 +121,43 @@ manifest precisely because exactly one of them is normally set.
 - **`CLOUDFLARE_API_TOKEN=proxy-injected` is a dummy** satisfying `wrangler`'s
   "am I authenticated" check. Never replace it with a real token.
 
+### GCP
+
+- **The agent's authority is exactly the impersonated service account's IAM
+  roles.** This is the sentence to read twice. The broker holds an ADC file,
+  exchanges the user's refresh token for a user access token, and calls
+  `generateAccessToken` on the service account named by `GCP_SERVICE_ACCOUNT`;
+  what comes back can do whatever that SA can do, for an hour, and nothing
+  more. Choosing those roles narrowly is the deployment's job and is the only
+  thing bounding blast radius — exactly as a GitHub App's permissions bound
+  the installation token. A service account with `roles/owner` produces an
+  agent with `roles/owner`.
+- **No service-account key exists anywhere.** The ADC file's long-lived secret
+  is the operator's refresh token, which is revocable and visible in Google's
+  session management, rather than a key file that is silent and permanent
+  until someone notices. A bare `authorized_user` ADC — the operator's own
+  identity with no impersonation — is refused by the broker outright.
+- **Which service account is deployment configuration, not the agent's
+  choice.** `GCP_SERVICE_ACCOUNT` is set on both `proxy` and `broker`, and is
+  cross-checked against the impersonation URL inside the ADC file; a mismatch
+  is a 403 rather than a silent preference. Two identities means two
+  deployments.
+- **`CLOUDSDK_AUTH_ACCESS_TOKEN=proxy-injected` is a dummy**, the top of
+  `gcloud`'s credential priority list. The client libraries do not read it and
+  need an ADC file instead, which `lab/setup.sh` writes — also inert, an
+  `external_account` whose credential source is a script printing a fixed
+  dummy. Neither holds a secret. Never replace either with a real value.
+- **`gcloud` needs its own CA variable.** `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`
+  must point at the proxy CA; `gcloud` reads none of `REQUESTS_CA_BUNDLE`,
+  `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`, and fails with
+  `CERTIFICATE_VERIFY_FAILED` without it. It does honour `http_proxy` /
+  `https_proxy`, so no `CLOUDSDK_PROXY_*` settings are needed.
+- **`/gcp/token` is exposed through cred-gateway**, unlike Anthropic's and
+  Cloudflare's credential routes. It is there for tooling the proxy cannot
+  mediate, gRPC-based client libraries being the known case. It hands over a
+  real short-lived token, on the same terms as `/github/credential` — see the
+  first bullet for what that token can do.
+
 ## Generating a stack
 
 Produce:

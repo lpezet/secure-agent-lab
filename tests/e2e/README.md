@@ -66,6 +66,67 @@ Override the directory with `AGENT_CREDS_DIR` if you keep it elsewhere.
 mints tokens, pushes commits and burns quota, and doing that with the App a
 real agent depends on turns a test bug into a production incident.
 
+### GCP (optional)
+
+`40-gcp` skips without this and the rest of the tier still runs. Four commands,
+and **no service-account key is created at any point** — that is the whole
+point of the design being tested.
+
+```bash
+PROJECT=your-test-project
+SA=sal-e2e-agent
+SA_EMAIL="$SA@$PROJECT.iam.gserviceaccount.com"
+
+# 1. A service account with NO roles. It can authenticate and do nothing else,
+#    which is deliberate: 40-gcp asserts that an injected call is not rejected
+#    as *unauthenticated*, and a 403 proves that as well as a 200 does.
+gcloud iam service-accounts create "$SA" --project="$PROJECT" \
+  --display-name="secure-agent-lab e2e (no permissions)"
+
+# 2. Let yourself impersonate it. This is the grant that replaces a key file.
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --project="$PROJECT" \
+  --member="user:$(gcloud config get-value account)" \
+  --role="roles/iam.serviceAccountTokenCreator"
+
+# 3. Produce an ADC file that impersonates it. CLOUDSDK_CONFIG points somewhere
+#    throwaway ON PURPOSE: without it this overwrites your own
+#    ~/.config/gcloud/application_default_credentials.json, and you would be
+#    re-running `gcloud auth application-default login` to get your own back.
+CLOUDSDK_CONFIG=/tmp/sal-e2e-gcloud gcloud auth application-default login \
+  --impersonate-service-account="$SA_EMAIL"
+
+# 4. Hand it to the tier.
+cp /tmp/sal-e2e-gcloud/application_default_credentials.json \
+   ~/.config/agent-creds-e2e/gcp-adc.json
+chmod 600 ~/.config/agent-creds-e2e/gcp-adc.json
+rm -rf /tmp/sal-e2e-gcloud
+```
+
+Then set `GCP_SERVICE_ACCOUNT` in `.env` to `$SA_EMAIL`. Optionally set
+`GCP_TEST_PROJECT`; it needs neither to exist nor to be readable.
+
+Check what you produced before trusting it — the file should say
+`impersonated_service_account`, and contain no `private_key`:
+
+```bash
+jq '.type, (.service_account_impersonation_url // "none"), (has("private_key"))' \
+  ~/.config/agent-creds-e2e/gcp-adc.json
+# "impersonated_service_account"
+# "https://iamcredentials.googleapis.com/v1/.../$SA_EMAIL:generateAccessToken"
+# false
+```
+
+The long-lived secret in that file is **your refresh token**, not a key. It is
+revocable (`gcloud auth application-default revoke`, or Google's session
+management) and it carries your own cloud identity, which is why it lives on
+the broker side and never in the lab. Cleaning up afterwards:
+
+```bash
+gcloud iam service-accounts delete "$SA_EMAIL" --project="$PROJECT"
+rm ~/.config/agent-creds-e2e/gcp-adc.json
+```
+
 ## The stack under test
 
 `compose.yaml` here, **not** `examples/claude-code/compose.yaml` — that one
@@ -90,6 +151,7 @@ no devcontainer lifecycle to hold it open. `run.sh` performs the two steps
 | `10-boundary` | Broker unresolvable and unroutable from lab, no tunnel through the proxy (including with a spoofed `Host`), cred-gateway allows exactly two paths, dummy env values intact, nothing credential-shaped in lab's environment or git config |
 | `20-injection` | Anthropic and GitHub over real HTTPS with no credential in the request, SSE not buffered, Admin API blocked, and the pre-fix exploit — claim to be the vendor, deliver to your own server — leaking nothing |
 | `30-git` | Identity from the broker, clone over HTTPS via the credential helper, no token persisted into `.git/config`, push a scratch branch, verify it landed, delete it |
+| `40-gcp` | Google's own `tokeninfo` confirming the minted token belongs to the *service account* and not the operator, an injected call not rejected as unauthenticated, the token exchange answered with the inert placeholder rather than a real token, and no credential shape in the broker's log. Skips unless GCP is configured |
 
 ## Cost and side effects
 
