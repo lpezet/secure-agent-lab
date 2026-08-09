@@ -33,6 +33,41 @@ If a partial setup already exists in their project, adapt to it rather than
 assuming a blank slate — use judgment, and ask the user if it's unclear
 whether something already there should be kept, replaced, or extended.
 
+### The credential's principal must not be the human operator
+
+The single most consequential thing about a deployment is not in any file this
+playbook generates. It is what the end-user puts in the secrets directory.
+
+Nothing stops someone dropping their own personal access token in there and
+pointing a provider at it. The stack keeps working, and it keeps *most* of its
+promise — the agent still never reads the token, the broker holds it, the proxy
+injects it. **Value isolation survives.** What collapses is authority
+isolation: the agent now acts as that person, across every repository, project
+and environment they can reach. The mechanism is unchanged and the blast radius
+is now a human's.
+
+So when gathering credentials, ask for a machine identity by name:
+
+| Provider | Ask for | Not |
+|---|---|---|
+| GitHub | a GitHub **App** private key (`.pem`) | `ghp_…`, `github_pat_…`, `gho_…` |
+| GCP | an `impersonated_service_account` or `service_account` ADC | a bare `authorized_user` ADC |
+| Cloudflare | a scoped API **token** | the global API key |
+| Anthropic | *there is no machine identity* | — |
+
+That last row is not a gap to paper over. Anthropic has no App, no service
+account, no impersonation: the key is the account. Say so rather than letting
+silence imply the same check passed there.
+
+`scripts/check-invariants.sh --secrets-dir <path>` checks this from the shape
+of each file — a prefix, a PEM header, a JSON `type` field — and never reads,
+prints or transmits a value. Without the flag it reports that it did not look,
+which is not the same as approval. It also cannot tell you whether a machine
+identity is *scoped* correctly: a GitHub App with admin on every repository
+passes, and so does a service account with `roles/owner`. This rule is about
+*whose* credential it is; how much that credential can do is the provider
+sections below.
+
 ## Known providers
 
 Each of these ships as a **bank entry** under [`bank/`](bank/) — the files
