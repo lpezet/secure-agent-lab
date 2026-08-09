@@ -160,6 +160,34 @@ tests/e2e/run.sh setup gcp --teardown   # deletes the SA and the ADC file
 gcloud auth application-default revoke  # if you want the token itself dead
 ```
 
+### Verifying the key-file path
+
+The broker accepts a service-account **key file** as well as impersonation,
+because a Workspace session policy can expire the refresh token and an
+unattended agent cannot re-authenticate. That path is otherwise only
+stub-tested — nothing has handed real Google an assertion signed by a real key.
+
+```bash
+tests/e2e/run.sh setup gcp --verify-key-file
+```
+
+Creates a key, points the stack at it, runs `40-gcp`, then restores the ADC
+file and **deletes the key in GCP**. The cleanup runs from a trap, so it
+happens on failure and on Ctrl-C too, and the key id is printed before use so
+it can be removed by hand if everything else fails.
+
+Deleting the local file is not enough on its own: the key stays valid and
+listed on the service account until it is deleted server-side, which is the
+part worth automating. To check nothing was left behind:
+
+```bash
+gcloud iam service-accounts keys list --iam-account="$SA_EMAIL" --managed-by=user
+```
+
+Org policy may forbid key creation entirely (`iam.disableServiceAccountKeyCreation`),
+in which case this reports that and changes nothing — which is itself a useful
+answer, since it means the key-file shape is not available to you anyway.
+
 <details>
 <summary>Doing it by hand instead</summary>
 

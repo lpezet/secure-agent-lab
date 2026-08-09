@@ -4,6 +4,9 @@
 #   tests/e2e/run.sh setup gcp             # plan, confirm, apply
 #   tests/e2e/run.sh setup gcp --yes       # no prompt, for reruns
 #   tests/e2e/run.sh setup gcp --teardown  # remove what this created
+#   tests/e2e/run.sh setup gcp --verify-key-file
+#                                          # exercise the key-file path once,
+#                                          # against real Google, leaving no key
 #
 # Reads GCP_PROJECT and GCP_SA from tests/e2e/.env, derives everything else,
 # and writes GCP_SERVICE_ACCOUNT back so the suite and the stack read the same
@@ -34,11 +37,12 @@ else
   G=''; R=''; Y=''; B=''; N=''
 fi
 
-ASSUME_YES=0 TEARDOWN=0
+ASSUME_YES=0 TEARDOWN=0 VERIFY_KEY=0
 for a in "$@"; do
   case "$a" in
     -y|--yes)   ASSUME_YES=1 ;;
     --teardown) TEARDOWN=1 ;;
+    --verify-key-file) VERIFY_KEY=1 ;;
     -h|--help)  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'unknown option: %s\n' "$a" >&2; exit 2 ;;
   esac
@@ -78,6 +82,83 @@ set_env() {
     printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
   fi
 }
+
+# -------------------------------------------------------------- verify a key
+#
+# The broker supports a service-account key file as well as impersonation,
+# because impersonation's refresh token can be expired by a Workspace session
+# policy and an unattended agent cannot re-authenticate. That path is otherwise
+# only stub-tested: nothing has ever handed a real Google endpoint an assertion
+# signed by a real key.
+#
+# This exercises it once, end to end, and leaves nothing behind. The key is
+# deleted **in GCP** — removing the local file alone leaves it valid and listed
+# on the service account, which is the mistake worth automating away.
+
+if [ "$VERIFY_KEY" = 1 ]; then
+  [ -n "${GCP_SERVICE_ACCOUNT:-}" ] || die "GCP_SERVICE_ACCOUNT is not set — run setup first"
+  SA_EMAIL="$GCP_SERVICE_ACCOUNT"
+
+  printf '\n%sVerify the key-file path%s\n' "$B" "$N"
+  printf '  service account  %s\n' "$SA_EMAIL"
+  printf '\n  1. create a service-account key (registered in GCP)\n'
+  printf '  2. point the stack at it, temporarily, in place of the ADC file\n'
+  printf '  3. run tests/e2e/run.sh 40\n'
+  printf '  4. restore the ADC file and DELETE THE KEY IN GCP\n'
+  printf '\n  %sStep 4 runs from a trap%s, so it happens on failure or Ctrl-C too. The\n' "$Y" "$N"
+  printf '  key id is printed before use, so it can be deleted by hand if all else fails.\n\n'
+  if [ "$ASSUME_YES" != 1 ]; then
+    read -r -p "Proceed? [y/N] " reply
+    case "$reply" in [yY]*) ;; *) printf 'aborted\n'; exit 0 ;; esac
+  fi
+
+  KEY_TMP="${TMPDIR:-/tmp}/sal-e2e-sa-key.$$.json"
+  ADC_BACKUP="$ADC_OUT.before-key-verify.$$"
+  KEY_ID=""
+
+  restore_and_revoke() {
+    local rc=$?
+    printf '\n%s→%s cleaning up\n' "$B" "$N"
+    if [ -f "$ADC_BACKUP" ]; then
+      mv -f "$ADC_BACKUP" "$ADC_OUT" && ok "ADC file restored"
+    fi
+    rm -f "$KEY_TMP"
+    if [ -n "$KEY_ID" ]; then
+      if gcloud iam service-accounts keys delete "$KEY_ID" \
+           --iam-account="$SA_EMAIL" --quiet >/dev/null 2>&1; then
+        ok "key $KEY_ID deleted in GCP"
+      else
+        printf '  %sWARNING%s key %s may still exist. Delete it:\n' "$R" "$N" "$KEY_ID" >&2
+        printf '    gcloud iam service-accounts keys delete %s --iam-account=%s\n' \
+          "$KEY_ID" "$SA_EMAIL" >&2
+      fi
+    fi
+    exit $rc
+  }
+  trap restore_and_revoke EXIT INT TERM
+
+  step "creating a service-account key"
+  gcloud iam service-accounts keys create "$KEY_TMP" --iam-account="$SA_EMAIL" >/dev/null 2>&1 \
+    || die "could not create a key — org policy may forbid it (iam.disableServiceAccountKeyCreation)"
+  chmod 600 "$KEY_TMP"
+  KEY_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["private_key_id"])' "$KEY_TMP")
+  ok "key $KEY_ID created — it will be deleted before this exits"
+
+  step "pointing the stack at it"
+  cp "$ADC_OUT" "$ADC_BACKUP"
+  cp "$KEY_TMP" "$ADC_OUT"
+  chmod 600 "$ADC_OUT"
+  ok "ADC file swapped (original saved)"
+
+  step "running the suite against the key file"
+  if bash "$E2E_DIR/run.sh" 40; then
+    printf '\n%skey-file path verified against real Google%s\n' "$G" "$N"
+  else
+    printf '\n%sthe suite failed with a key file%s — see above\n' "$R" "$N"
+    exit 1
+  fi
+  exit 0
+fi
 
 # ------------------------------------------------------------------ teardown
 
