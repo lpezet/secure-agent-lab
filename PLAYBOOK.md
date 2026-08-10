@@ -207,16 +207,22 @@ manifest precisely because exactly one of them is normally set.
   need an ADC file instead, which `lab/setup.sh` writes — also inert, an
   `external_account` whose credential source is a script printing a fixed
   dummy. Neither holds a secret. Never replace either with a real value.
-- **`gcloud` needs its own CA variable.** `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE`
-  must point at the proxy CA; `gcloud` reads none of `REQUESTS_CA_BUNDLE`,
-  `SSL_CERT_FILE` or `NODE_EXTRA_CA_CERTS`, and fails with
-  `CERTIFICATE_VERIFY_FAILED` without it. It does honour `http_proxy` /
-  `https_proxy`, so no `CLOUDSDK_PROXY_*` settings are needed.
+- **Every client brings its own trust store.** None of them read the system
+  store that `setup.sh` populates, so the lab sets one variable per family:
+  `REQUESTS_CA_BUNDLE` (`requests`, `google-auth`, and `botocore` by
+  fallback), `NODE_EXTRA_CA_CERTS` (Node), `SSL_CERT_FILE` (raw `ssl`),
+  `CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE` (`gcloud`) and
+  `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` (gRPC). Miss one and that client alone
+  fails — `gcloud` with `CERTIFICATE_VERIFY_FAILED`, gRPC by hanging.
+  `SSL_CERT_FILE` does **not** cover `requests`, which passes `certifi`'s path
+  explicitly. `gcloud` honours `http_proxy` / `https_proxy`, so no
+  `CLOUDSDK_PROXY_*` settings are needed.
 - **`/gcp/token` is exposed through cred-gateway**, unlike Anthropic's and
-  Cloudflare's credential routes. It is there for tooling the proxy cannot
-  mediate, gRPC-based client libraries being the known case. It hands over a
-  real short-lived token, on the same terms as `/github/credential` — see the
-  first bullet for what that token can do.
+  Cloudflare's credential routes. It hands over a real short-lived token on the
+  same terms as `/github/credential`, for tooling that wants a credential in
+  hand rather than injected in flight — see the first bullet for what that
+  token can do. It is *not* justified by gRPC being unmediatable: that was the
+  original reason and #48 measured it false.
 
 ## Generating a stack
 
@@ -360,15 +366,17 @@ credential to. That has only ever been exercised against clients speaking
 clients measured in #40. Two categories are known to sit outside that, and
 neither is implemented today:
 
-- **gRPC over HTTP/2 is untested.** A large part of Google Cloud speaks it —
-  Pub/Sub, Spanner, Firestore, Bigtable. mitmproxy speaks HTTP/2 and gRPC
-  metadata *is* HTTP/2 headers, so injection ought to work, but nobody has
-  run it. Do not write an addon for a gRPC-based API and assume the pattern
-  in this playbook carries over; there is no evidence yet that it does.
-  Tracked as its own spike, along with the question of which trust store
-  gRPC uses — it bundles its own roots rather than reading
-  `REQUESTS_CA_BUNDLE`, so it likely needs `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`
-  set as well.
+- **gRPC over HTTP/2 works, with two environment variables.** Measured, not
+  assumed: mitmproxy intercepts it through `CONNECT`, and an addon reads and
+  rewrites the `authorization` metadata like any other header — a rewritten
+  value reaches the server. So an addon for Pub/Sub, Spanner, Firestore or
+  Bigtable needs no new mechanism.
+
+  What it needs is `http_proxy` / `https_proxy` in **lowercase**, because gRPC
+  reads only those and not the uppercase forms, and
+  `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH`, because it bundles its own roots and
+  reads none of the other CA variables. The lab sets all of them. Get either
+  wrong and gRPC does not fail with a clear error — it retries and hangs.
 - **Anything that authenticates by signing rather than by attaching a
   token.** AWS SigV4 covers `host` and the date in the signature, so the
   proxy cannot swap a value — it would have to recompute the signature over

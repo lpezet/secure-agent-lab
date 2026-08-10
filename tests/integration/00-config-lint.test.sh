@@ -344,6 +344,19 @@ for c in "${COMPOSES[@]}" tests/e2e/compose.yaml; do
   else ko "$c — lab network permits unmediated egress" "$bad"; fi
 done
 
+suite "the lab sets proxy env in both cases, because gRPC reads only lowercase"
+# gRPC core reads grpc_proxy / https_proxy / http_proxy and ignores the
+# uppercase forms, so a lab with only HTTP_PROXY proxies its HTTP clients and
+# not its gRPC ones. Measured in #48: zero flows reached the proxy with
+# uppercase alone. It also needs its own CA variable — it bundles its own roots
+# and reads none of the other three.
+for c in stack/compose.yaml examples/*/compose.yaml examples/*/.devcontainer/compose.yaml; do
+  [ -f "$c" ] || continue
+  if bad=$(inv_proxy_env_case "$c"); then ok "$c — proxy env set in both cases"
+  else ko "$c — gRPC would ignore the proxy" "$bad"; fi
+  check_contains "$c — sets the gRPC CA variable" "$(cat "$c")" "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
+done
+
 suite "observer and log-rotator stay off secure/lab"
 # Deliberately no `networks:` key for either — see CLAUDE.md. They still land
 # on Compose's implicit `default` network, but every other service declares
