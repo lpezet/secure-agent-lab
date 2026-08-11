@@ -8,6 +8,58 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.9.0 — 2026-08-11
+
+One field, so that something outside this repo can install from the bank
+without guessing.
+
+### Added
+
+**`schema_version` on every bank manifest.** The bank exists to be installed
+from — the correctness bar in `bank/README.md` is that someone *or something*
+holding only `bank/<name>/` and a running stack can install the provider. The
+"or something" is a tool that does not live here, and it had no way to tell
+whether it understood the contract it was reading. This is the one point where
+the bank and such a tool are allowed to break compatibility, and until now it
+did not exist.
+
+Required, an integer, currently `1`. Three decisions in it, each with a
+plausible alternative:
+
+**Per entry, not once for the bank.** A version living in `bank/schema/` would
+leave an entry copied out of the bank unversioned — which fails the standalone
+bar above exactly, since that entry is still meant to be installable on its own.
+
+**An integer, not a semver.** This is a compatibility generation. A minor number
+invites "1.1 is probably close enough", and that guess is the whole thing the
+field exists to remove.
+
+**Refuse higher, not best-effort.** An installer supports a fixed set of
+generations and refuses anything above them. A manifest from the future may
+declare a control the installer does not know to apply, and an install that
+silently skips a control is worse than one that refuses to run. The rule is
+written into the field's own `description`, because the schema is what a future
+installer actually reads — not into prose it will never see.
+
+Bump it for anything an installer must act on: a new field, a changed meaning, a
+changed directory convention. Not for rewording a description. It should move on
+the order of never; if it moves often, the manifest has become a config file.
+
+The lint reads the accepted value out of the schema's `const` rather than
+restating it, matching how it already sources `required[]`, the `load_band` enum
+and the `name` pattern — so bumping the generation in the schema is what bumps
+it in the suite, in one commit.
+
+### Upgrading
+
+Nothing to do, and no boundary change. A deployment does not read manifests;
+they describe bank entries for whoever installs them.
+
+**If you have written your own bank entry**, add `"schema_version": 1` to its
+`provider.json`. The lint fails without it, since the schema now requires it.
+
+---
+
 ## 1.8.0 — 2026-08-11
 
 Three ways the boundary was weaker than the documentation said, none of them

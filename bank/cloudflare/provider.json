@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "name": "cloudflare",
   "summary": "Scoped Cloudflare API token minted per profile from a long-lived minter token",
   "min_stack": "1.1.0",
