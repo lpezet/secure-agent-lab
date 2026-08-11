@@ -8,6 +8,126 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.8.0 — 2026-08-11
+
+Three ways the boundary was weaker than the documentation said, none of them
+in the mechanism: whose credentials went in, whether the trail existed where it
+mattered, and which clients actually used the proxy.
+
+### Added
+
+**`check-invariants.sh --secrets-dir <path>` asks whose credential this is.**
+The mitigation is only ever as strong as its setup, and nothing stopped someone
+dropping a personal access token into the secrets directory and pointing a
+provider at it. Value isolation survives that intact — the agent still never
+reads the secret — and authority isolation collapses, because the agent now
+acts as that person everywhere they can reach. Same mechanism, blast radius of
+a human.
+
+Each credential is classified by shape: a PEM header, a JSON `type` field, a
+token prefix. A GitHub PAT and a bare `authorized_user` ADC fail. A GitHub App
+key and both machine ADC shapes pass silently.
+
+Three things it deliberately does not do. It never reads, prints or transmits a
+value — detection is quiet greps, and the output is a filename and a verdict.
+It never follows a path out of the directory it was given. And it says what it
+cannot vouch for instead of passing over it: an Anthropic key has no machine
+identity to compare against, and an unrecognised shape is not evidence of
+anything, so both are notes. Absence of the flag is reported too — a run that
+never looked at the credentials has established nothing about whose they are.
+
+One bug this found by being run against a real `~/.config/gcloud` file rather
+than a fixture: an impersonated ADC nests the credential doing the
+impersonating, and gcloud writes keys alphabetically, so
+`source_credentials.type: authorized_user` appears *before* the top-level type.
+Reading the first match called the safest shape this stack supports the
+operator's own identity — on every deployment using it. The type is now read at
+depth 1, ignoring anything inside a string.
+
+**The e2e tier now carries the audit trail it was the only place able to
+check.** The tier that runs against real credentials wired no trail at all: no
+`audit-logs` volume, no `AUDIT_LOG`, so every `logEvent` call it made was a
+silent no-op. That had a cost, which is how it was found — a real `git push`
+403'd during 1.7.0's GCP work, and "what scope does this installation token
+actually carry" is precisely what 1.6.0 put in the trail to answer. The answer
+was unavailable in the one tier holding a real token, and the diagnosis came
+from the GitHub UI instead.
+
+broker, proxy and cred-gateway now share the volume there, with `log-rotator`
+alongside them. Not decoration: three different non-root uids write that
+directory and the rotator's entrypoint is the only thing that can chmod it for
+all of them. `observer` stays out — it publishes over HTTP, and the suites read
+the volume directly.
+
+New suite `50-audit`, 18 assertions, running last so it sees what the earlier
+suites provoked and provoking its own events first so it still works alone.
+What it adds over the integration tier's `35-audit-leak` is that the trail
+describes *real* authority: `permissions` and `repository_selection` from a
+live installation, the enum rather than repository names, an injection recorded
+with its provider, the credential-helper request recorded and the healthcheck
+not.
+
+### Fixed
+
+**The lab proxied its HTTP clients and not its gRPC ones.** gRPC core reads
+`grpc_proxy`, `https_proxy` and `http_proxy` — lowercase only — and every
+compose file here set the uppercase forms alone. Measured: zero flows reached
+the proxy with uppercase set, two with lowercase. gRPC also bundles its own
+roots and reads none of the three CA variables already exported, so it needs
+`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` as well. Both are now set everywhere.
+
+Scoped honestly: **with `internal: true` this failed closed**, which is why it
+went unnoticed — the lab has no route out except the proxy, so an unproxied
+gRPC client reached nothing. With `LAB_INTERNAL=false` it did not fail closed:
+there is a default gateway, so the client egressed directly, past the allowlist
+and absent from the audit trail. Neither failure announces itself — gRPC does
+not raise a TLS error, it retries and hangs.
+
+`proxy_env_case` fails a compose that sets one case and not the other, so the
+next deployment hears about it rather than discovering it the day something
+speaks gRPC.
+
+**A justification we shipped in 1.7.0 was false.** `/gcp/token` is exposed
+through cred-gateway, and the snippet, `PLAYBOOK.md` and `CLAUDE.md` all
+explained that by saying some tooling cannot be mediated by the proxy at all,
+with gRPC client libraries as the known case. Measuring it gave the opposite
+answer: mitmproxy intercepts gRPC through CONNECT, an addon reads and rewrites
+the `authorization` metadata, and the rewritten value reaches the server.
+
+The route stays. What carries it is the parity with `/github/credential` — a
+short-lived scoped token rather than a reusable secret, and the authority
+handed over is the service account's IAM roles either way — which was always
+the load-bearing half of the argument. The stated reason is now the true one,
+and `PLAYBOOK.md`'s "what the proxy has not been shown to mediate" loses its
+gRPC half to a measured answer. Signature-based auth like AWS SigV4 remains
+genuinely unswappable and stays on that list.
+
+### Upgrading
+
+Nothing is required to stay safe, and the boundary is unchanged in every
+deployment running the default `internal: true`.
+
+**If you run `LAB_INTERNAL=false`, add the lowercase proxy variables.** That is
+the configuration where the gRPC gap was real egress. Copy them from any
+`compose.yaml` here:
+
+```yaml
+http_proxy: http://proxy:8080
+https_proxy: http://proxy:8080
+no_proxy: localhost,127.0.0.1,cred-gateway
+GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /proxy-certs/mitmproxy-ca-cert.pem
+```
+
+A compose file setting one case without the other now fails
+`check-invariants.sh`.
+
+**`check-invariants.sh` will note that it did not check your credentials.**
+Passing `--secrets-dir ~/.config/agent-creds` is opt-in and reads nothing but
+the shape of each file. The note is the honest report of a check not run, not a
+new defect.
+
+---
+
 ## 1.7.0 — 2026-08-09
 
 A cloud identity the agent can use and cannot take, and one host matcher

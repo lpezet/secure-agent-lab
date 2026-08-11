@@ -13,6 +13,11 @@
 #
 #   scripts/check-invariants.sh .devcontainer
 #   scripts/check-invariants.sh --quiet /path/to/deployment   # findings only
+#   scripts/check-invariants.sh --secrets-dir ~/.config/agent-creds .devcontainer
+#
+# --secrets-dir additionally checks the credentials themselves, for whether
+# their principal is a machine or the human operator. Absent the flag that
+# whole class is skipped, and the summary says so — it is not a pass.
 #
 # Exit codes: 0 no findings · 1 at least one `fail` finding · 2 cannot run.
 # `note` findings alone do not fail the run.
@@ -20,10 +25,15 @@ set -uo pipefail
 
 usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
-DEPLOY="" QUIET=0
+DEPLOY="" QUIET=0 SECRETS_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -q|--quiet) QUIET=1; shift ;;
+    --secrets-dir)
+      SECRETS_DIR="${2:-}"; shift 2
+      [ -n "$SECRETS_DIR" ] || { printf -- '--secrets-dir needs a path\n' >&2; exit 2; }
+      [ -d "$SECRETS_DIR" ] || { printf 'not a directory: %s\n' "$SECRETS_DIR" >&2; exit 2; }
+      ;;
     -h|--help)  usage; exit 0 ;;
     -*)         printf 'unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
     *)
@@ -114,6 +124,36 @@ if [ -d "$DEPLOY/proxy" ]; then
   fi
 fi
 
+# ------------------------------------------------- the credentials themselves
+#
+# The only class that reads outside the deployment directory, and the only one
+# that is opt-in. Everything above asks whether the code is safe; this asks
+# whether the inputs are, which is a different question with the same answer
+# when it goes wrong — an agent acting as the human.
+SECRETS_SCANNED=0
+if [ -n "$SECRETS_DIR" ]; then
+  SECRETS_SCANNED=$(find "$SECRETS_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+  header_done=0
+  for check in credential_principal credential_unclassified; do
+    if out=$("inv_$check" "$SECRETS_DIR"); then continue; fi
+    if [ "$header_done" = 0 ]; then
+      printf '  %s%s%s\n' "$B" "$SECRETS_DIR" "$N"; header_done=1
+    fi
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      ev=$(printf '%s' "${line#*:}" | sed 's/^[[:space:]]*//')
+      if [ "$check" = credential_principal ]; then
+        fail_f "$(printf '%-5s %s\n           %s' '' 'credential principal is the human operator, not a machine' "$ev")"
+      else
+        note_f "$(printf '%-5s %s\n           %s' '' 'credential shape cannot be vouched for' "$ev")"
+      fi
+    done <<EOF
+$out
+EOF
+  done
+  [ "$header_done" = 1 ] && printf '\n'
+fi
+
 # ------------------------------------------------------------------- verdict
 #
 # The honesty constraint, and the reason this script exists in the shape it
@@ -124,6 +164,17 @@ fi
 # standing note about what that does and does not mean.
 printf '%ssummary%s     %d file(s) scanned · %d fail · %d note\n' \
   "$B" "$N" "$SCANNED" "$FAILN" "$NOTEN"
+
+# Absence of the credential class is reported, never passed over. A run without
+# --secrets-dir has not established anything about whose credentials these are,
+# and silence there would read as approval — the same honesty constraint the
+# rest of this script is built around.
+if [ -n "$SECRETS_DIR" ]; then
+  printf '            %d credential file(s) checked in %s\n' "$SECRETS_SCANNED" "$SECRETS_DIR"
+else
+  printf '            %scredentials not checked%s — no --secrets-dir given, so nothing here\n' "$Y" "$N"
+  printf '            says whether their principal is a machine or you.\n'
+fi
 
 if [ "$SCANNED" = 0 ]; then
   printf '\nNothing to scan. Expected proxy/, broker/, cred-gateway/ or a compose\n'

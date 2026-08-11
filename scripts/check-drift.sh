@@ -17,6 +17,12 @@
 #   scripts/check-drift.sh --to v1.4.0 /path/to/deployment   # preview an upgrade
 #   scripts/check-drift.sh --ref . --show-diff .devcontainer # against a checkout
 #
+# SECRETS_DIR additionally asks whether the credentials themselves belong to a
+# machine or to you — see check-invariants.sh --secrets-dir. Not guessed at:
+# where they live is yours to say.
+#
+#   SECRETS_DIR=~/.config/agent-creds scripts/check-drift.sh .devcontainer
+#
 # Exit codes: 0 clean · 1 drift found · 2 cannot run.
 set -uo pipefail
 
@@ -302,7 +308,12 @@ if [ "${SKIP_INVARIANTS:-0}" = 1 ]; then
   :
 elif [ -x "$INV_SH" ] || [ -f "$INV_SH" ]; then
   printf '\n'
-  bash "$INV_SH" --quiet "$DEPLOY" || INV_RC=$?
+  # Passed through rather than discovered: where the credentials live is the
+  # operator's business, and guessing at ~/.config/agent-creds would read files
+  # nobody pointed this at.
+  INV_ARGS=(--quiet)
+  [ -n "${SECRETS_DIR:-}" ] && INV_ARGS+=(--secrets-dir "$SECRETS_DIR")
+  bash "$INV_SH" "${INV_ARGS[@]}" "$DEPLOY" || INV_RC=$?
 else
   note "check-invariants.sh" "not found beside this script — invariants not scanned"
 fi

@@ -147,9 +147,20 @@ services:
       HTTP_PROXY: http://proxy:8080
       HTTPS_PROXY: http://proxy:8080
       NO_PROXY: localhost,127.0.0.1,cred-gateway
+      # Both cases, and not for tidiness. gRPC reads `grpc_proxy`, `https_proxy`
+      # and `http_proxy` — lowercase only — so with the uppercase forms alone a
+      # gRPC client ignores the proxy entirely. Measured in #48: zero flows
+      # reached the proxy with uppercase set, two with lowercase.
+      http_proxy: http://proxy:8080
+      https_proxy: http://proxy:8080
+      no_proxy: localhost,127.0.0.1,cred-gateway
       NODE_EXTRA_CA_CERTS: /proxy-certs/mitmproxy-ca-cert.pem
       REQUESTS_CA_BUNDLE: /proxy-certs/mitmproxy-ca-cert.pem
       SSL_CERT_FILE: /proxy-certs/mitmproxy-ca-cert.pem
+      # gRPC bundles its own roots, like every other client in #40 — it reads
+      # none of the three above. Without this it does not fail with a TLS
+      # error, it retries and hangs.
+      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /proxy-certs/mitmproxy-ca-cert.pem
       GIT_CREDENTIAL_URL: http://cred-gateway/github/credential
       GITHUB_IDENTITY_URL: http://cred-gateway/github/identity
       GH_TOKEN: proxy-injected

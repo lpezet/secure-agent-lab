@@ -349,6 +349,29 @@ inv_egress_unmediated() {
   return 0
 }
 
+# gRPC reads `grpc_proxy`, `https_proxy` and `http_proxy` — lowercase only. A
+# lab that sets HTTP_PROXY and not http_proxy proxies its HTTP clients and not
+# its gRPC ones, which is invisible until something speaks gRPC and then looks
+# like a network fault rather than a proxy one.
+#
+# Fails rather than notes because of what it means with `internal: false`: the
+# lab has a default gateway, so an unproxied gRPC client egresses directly,
+# past the allowlist and absent from the audit trail. With `internal: true` it
+# fails closed instead — still wrong, just quietly.
+#
+# Measured in #48: zero flows reached the proxy with only the uppercase forms
+# set, two with the lowercase ones.
+inv_proxy_env_case() {
+  local f="$1" upper lower
+  upper=$(grep -nE '^[[:space:]]*HTTP(S)?_PROXY:' "$f" 2>/dev/null | head -1)
+  [ -n "$upper" ] || return 0            # no proxy env here at all
+  lower=$(grep -cE '^[[:space:]]*http(s)?_proxy:' "$f" 2>/dev/null)
+  [ "${lower:-0}" -ge 1 ] && return 0
+  printf '%s: sets HTTP_PROXY but not http_proxy — gRPC reads lowercase only\n' \
+    "${upper%%:*}"
+  return 1
+}
+
 # --------------------------------------------------------------- checks: any
 
 # A credential-shaped literal anywhere in a deployment file. The lint sweeps the
@@ -364,6 +387,152 @@ $INV_CRED_PATTERNS
 EOF
   out=$(printf '%s' "$out" | grep -v '^$' || true)
   _inv_report "$f" "$out"
+}
+
+# ----------------------------------------------- checks: the secrets directory
+#
+# A new class. Every check above reads a file INSIDE the deployment — an addon,
+# a provider, a snippet, a compose file. These read deployment *inputs*, which
+# live on the host, outside anything the scanner is otherwise pointed at. They
+# run only when `--secrets-dir` is given, and their absence is reported rather
+# than passed over.
+#
+# THE RULE: the credential's principal must not be the human operator.
+#
+# Value isolation survives a personal token — the agent still never reads it,
+# the broker holds it, the proxy injects it. Authority isolation does not: the
+# agent acts as the human, everywhere that human can reach. Only the second
+# depends on what is in this directory, and it is the one that sets blast
+# radius. The mechanism is fine and the setup is the whole risk.
+#
+# NOTHING HERE MAY PRINT A FILE'S CONTENTS. Detection is by shape — a prefix, a
+# PEM header, a JSON type field — using quiet greps, and output is a filename
+# and a verdict. A check that leaks the credential it is checking would be a
+# worse bug than the one it looks for. `tests/integration/08-credential-principal`
+# asserts that directly, against real credential-shaped fixtures.
+
+# _inv_adc_type <file> — the TOP-LEVEL `type` field of a Google ADC file.
+# The value is a type name, never a secret.
+#
+# Depth matters, and a plain grep gets this wrong on a real file. An
+# impersonated ADC nests the credential that does the impersonating:
+#
+#   { "service_account_impersonation_url": "...",
+#     "source_credentials": { ..., "type": "authorized_user" },
+#     "type": "impersonated_service_account" }
+#
+# gcloud writes those keys alphabetically, so the nested `authorized_user`
+# comes FIRST — and reading it would call the safest shape this stack supports
+# the operator's own identity, on every deployment that uses it. Found by
+# running this against a real ~/.config/gcloud ADC rather than a fixture.
+#
+# So: track brace depth, ignore anything inside a string, report `type` only at
+# depth 1. awk rather than a JSON parser because this must keep working on a
+# deployment with nothing installed.
+_inv_adc_type() {
+  awk '
+    {
+      line = $0
+      n = length(line)
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (instr) {
+          if (c == "\\") { i++; continue }
+          if (c == "\"") { instr = 0; buf = buf "\"" }
+          else buf = buf c
+          continue
+        }
+        if (c == "\"") { instr = 1; buf = buf "\"" ; continue }
+        if (c == "{" || c == "[") { depth++; buf = buf c; continue }
+        if (c == "}" || c == "]") { depth--; buf = buf c; continue }
+        # Record depth alongside the text so the match below can be scoped.
+        buf = buf c
+        if (c == ":") buf = buf "\001" depth "\002"
+      }
+    }
+    END {
+      # "type"<:><depth 1><"value">
+      if (match(buf, /"type"[ \t]*:\001 ?1\002[ \t]*"[a-z_]+"/)) {
+        seg = substr(buf, RSTART, RLENGTH)
+        sub(/.*"/, "", seg)
+        n2 = match(buf, /"type"[ \t]*:\001 ?1\002[ \t]*"[a-z_]+"/)
+        seg = substr(buf, RSTART, RLENGTH)
+        gsub(/.*\002[ \t]*"/, "", seg); gsub(/".*/, "", seg)
+        print seg
+      }
+    }
+  ' "$1" 2>/dev/null
+}
+
+# _inv_classify <file> — machine | human | unknown | none, on stdout.
+# `none` means "a credential with no machine identity to compare against".
+_inv_classify() {
+  local f="$1" adc
+  adc=$(_inv_adc_type "$f")
+  case "$adc" in
+    # A bare authorized_user IS the operator: their own Google identity, with
+    # no service account in front of it.
+    authorized_user) printf 'human'; return ;;
+    service_account|impersonated_service_account|external_account)
+      printf 'machine'; return ;;
+  esac
+
+  # A GitHub App key, or a service-account key. Either way a machine.
+  if grep -q 'BEGIN [A-Z ]*PRIVATE KEY' "$f" 2>/dev/null; then
+    printf 'machine'; return
+  fi
+
+  # GitHub personal tokens. ghp_/github_pat_ are a user's own; gho_/ghu_ are
+  # OAuth-user tokens, equally the human. ghs_ is a server-to-server
+  # installation token — a machine, but short-lived and not a thing to store
+  # here, so it is left to `unknown` rather than blessed.
+  if grep -qE '(^|[^A-Za-z0-9_])(ghp_|github_pat_|gho_|ghu_)[A-Za-z0-9_]{20,}' "$f" 2>/dev/null; then
+    printf 'human'; return
+  fi
+
+  # Anthropic has no machine identity at all — no App, no service account, no
+  # impersonation. There is nothing to check, and saying so is the point.
+  if grep -qE 'sk-ant-' "$f" 2>/dev/null; then
+    printf 'none'; return
+  fi
+
+  printf 'unknown'
+}
+
+# inv_credential_principal <dir> — credentials whose principal is the operator.
+# Directory-level, like inv_policy_addon_first, so it is called directly rather
+# than through the registry.
+inv_credential_principal() {
+  local d="$1" f out=""
+  [ -d "$d" ] || return 0
+  # -maxdepth 1 and no -L: never follow a path out of the directory given.
+  for f in $(find "$d" -maxdepth 1 -type f 2>/dev/null | sort); do
+    [ "$(_inv_classify "$f")" = human ] || continue
+    out="${out}0: $(basename "$f") — the principal is the operator, not a machine"$'\n'
+  done
+  out=$(printf '%s' "$out" | grep -v '^$' || true)
+  _inv_report "$d" "$out"
+}
+
+# inv_credential_unclassified <dir> — everything this cannot vouch for.
+# Separate function, and a note rather than a failure, because "I do not
+# recognise this shape" and "this is the human" are different claims and only
+# one of them is a finding. A clean run of the first with several of these is
+# exactly the situation where a clean result must not read as a pass.
+inv_credential_unclassified() {
+  local d="$1" f kind out=""
+  [ -d "$d" ] || return 0
+  for f in $(find "$d" -maxdepth 1 -type f 2>/dev/null | sort); do
+    kind=$(_inv_classify "$f")
+    case "$kind" in
+      none)
+        out="${out}0: $(basename "$f") — this provider has no machine identity, so nothing here can be checked"$'\n' ;;
+      unknown)
+        out="${out}0: $(basename "$f") — shape not recognised; check by hand whose credential this is"$'\n' ;;
+    esac
+  done
+  out=$(printf '%s' "$out" | grep -v '^$' || true)
+  _inv_report "$d" "$out"
 }
 
 # ------------------------------------------------------- directory-level check
@@ -399,7 +568,8 @@ real_credential|fail|compose|env var holds something other than the inert placeh
 env_value_credential|note|broker_js|credential read from an env value rather than a *_PATH file
 observer_port|note|compose|observer port is not bound to loopback
 credential_material|fail|proxy_py broker_js gateway_conf compose|credential-shaped string in a deployment file
-egress_unmediated|fail|compose|lab network is not internal, so the proxy can be bypassed'
+egress_unmediated|fail|compose|lab network is not internal, so the proxy can be bypassed
+proxy_env_case|fail|compose|sets only uppercase proxy vars, which gRPC ignores'
 
 # inv_field <name> <1=severity|2=applies|3=description>
 inv_field() {
