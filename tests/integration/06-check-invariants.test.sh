@@ -259,6 +259,20 @@ sed -i '/internal: /d' "$d/compose.yaml"
 out=$(run "$d")
 check_not_contains "does not point at the service block" "$out" " $svc: lab network"
 
+suite "a lab that sets only uppercase proxy vars is a finding"
+# The deployment-facing half. Existing deployments predate this and will start
+# seeing it, which is the intended behaviour: their gRPC clients are not being
+# proxied and nothing said so.
+d=$(mkdep proxycase)
+out=$(run "$d")
+check_contains "the shipped default is clean" "$out" "0 fail"
+
+d=$(mkdep proxycase-upperonly)
+sed -i '/^[[:space:]]*http_proxy:/d; /^[[:space:]]*https_proxy:/d' "$d/compose.yaml"
+out=$(run "$d")
+check_contains "uppercase alone is a finding" "$out" "which gRPC ignores"
+check_contains "and fails the run" "$out" "EXIT=1"
+
 suite "note-severity findings do not fail the run"
 d=$(mkdep noteonly)
 # observer published on all interfaces: worth saying, not worth failing on.

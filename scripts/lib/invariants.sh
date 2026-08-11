@@ -349,6 +349,29 @@ inv_egress_unmediated() {
   return 0
 }
 
+# gRPC reads `grpc_proxy`, `https_proxy` and `http_proxy` — lowercase only. A
+# lab that sets HTTP_PROXY and not http_proxy proxies its HTTP clients and not
+# its gRPC ones, which is invisible until something speaks gRPC and then looks
+# like a network fault rather than a proxy one.
+#
+# Fails rather than notes because of what it means with `internal: false`: the
+# lab has a default gateway, so an unproxied gRPC client egresses directly,
+# past the allowlist and absent from the audit trail. With `internal: true` it
+# fails closed instead — still wrong, just quietly.
+#
+# Measured in #48: zero flows reached the proxy with only the uppercase forms
+# set, two with the lowercase ones.
+inv_proxy_env_case() {
+  local f="$1" upper lower
+  upper=$(grep -nE '^[[:space:]]*HTTP(S)?_PROXY:' "$f" 2>/dev/null | head -1)
+  [ -n "$upper" ] || return 0            # no proxy env here at all
+  lower=$(grep -cE '^[[:space:]]*http(s)?_proxy:' "$f" 2>/dev/null)
+  [ "${lower:-0}" -ge 1 ] && return 0
+  printf '%s: sets HTTP_PROXY but not http_proxy — gRPC reads lowercase only\n' \
+    "${upper%%:*}"
+  return 1
+}
+
 # --------------------------------------------------------------- checks: any
 
 # A credential-shaped literal anywhere in a deployment file. The lint sweeps the
@@ -545,7 +568,8 @@ real_credential|fail|compose|env var holds something other than the inert placeh
 env_value_credential|note|broker_js|credential read from an env value rather than a *_PATH file
 observer_port|note|compose|observer port is not bound to loopback
 credential_material|fail|proxy_py broker_js gateway_conf compose|credential-shaped string in a deployment file
-egress_unmediated|fail|compose|lab network is not internal, so the proxy can be bypassed'
+egress_unmediated|fail|compose|lab network is not internal, so the proxy can be bypassed
+proxy_env_case|fail|compose|sets only uppercase proxy vars, which gRPC ignores'
 
 # inv_field <name> <1=severity|2=applies|3=description>
 inv_field() {
