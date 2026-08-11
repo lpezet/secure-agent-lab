@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "name": "anthropic",
   "summary": "Anthropic credential for api.anthropic.com; prefers OAuth token over API key, Admin API blocked",
   "min_stack": "1.1.0",

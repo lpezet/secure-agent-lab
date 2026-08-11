@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "name": "github",
   "summary": "GitHub App installation token for api.github.com, plus git credential-helper and identity endpoints",
   "min_stack": "1.1.0",

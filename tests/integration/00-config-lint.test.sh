@@ -494,6 +494,9 @@ else
   req_fields=$(jq -r '.required[]' "$BANK_SCHEMA")
   name_pat=$(jq -r '.properties.name.pattern' "$BANK_SCHEMA")
   bands=$(jq -r '.properties.load_band.enum[]' "$BANK_SCHEMA")
+  # The generation this repo ships. Read out of the schema for the same reason
+  # as the rest: bumping it there is what bumps it here, in one commit.
+  schema_gen=$(jq -r '.properties.schema_version.const' "$BANK_SCHEMA")
   # Every top-level property the schema knows about, so a stray key is caught
   # even though we are not running a real validator.
   known=$(jq -r '.properties | keys[]' "$BANK_SCHEMA")
@@ -512,6 +515,17 @@ else
       if jq -e --arg k "$f" 'has($k)' "$man" >/dev/null; then ok "$man — has required .$f"
       else ko "$man — missing required .$f" "schema requires it"; fi
     done
+
+    # Every entry declares the generation this repo ships. A mixed bank would
+    # mean an installer that supports only the older one silently skips whatever
+    # the newer entries added — the exact thing the field exists to stop.
+    sv=$(jq -r '.schema_version // ""' "$man")
+    check "$man — .schema_version is the generation the schema declares" "$sv" "$schema_gen"
+    if jq -e '.schema_version | type == "number" and . == floor' "$man" >/dev/null 2>&1; then
+      ok "$man — .schema_version is an integer"
+    else
+      ko "$man — .schema_version is not an integer" "got '$sv' — a compatibility generation, not a semver"
+    fi
 
     mname=$(jq -r '.name // ""' "$man")
     check "$man — .name matches directory name" "$mname" "$base"
