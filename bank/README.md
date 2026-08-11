@@ -77,7 +77,27 @@ bank/
 for the full contract — every field carries its own `description`, including
 what breaks when it is wrong.
 
-Two fields are worth calling out because they are easy to conflate:
+Three fields are worth calling out.
+
+**`schema_version`** is the generation of the manifest contract, and the only
+thing that should ever break compatibility between this bank and a tool
+installing from it. An installer supports a fixed set of generations and
+**refuses anything higher** rather than doing its best with it: a manifest from
+the future may declare a control the installer does not know to apply, and an
+install that silently skips a control is worse than one that refuses to run.
+
+It is an integer, not a semver, because it is a compatibility generation rather
+than a version — `1.1` invites "that is probably close enough", which is the one
+judgement call this field exists to remove. It is carried **per entry** rather
+than once for the bank because of the standalone bar above: `bank/<name>/`
+copied out on its own is still installable, and still says what it is.
+
+Bump it for anything an installer must act on — a new field, a changed meaning,
+a changed directory convention. Not for rewording a description. It should move
+on the order of never; if it is moving often, the manifest has become a config
+file.
+
+Two more are worth calling out because they are easy to conflate:
 
 **`secrets` vs `config`** are separate because the providers treat them so.
 `GITHUB_APP_PRIVATE_KEY_PATH` names a file the broker reads out of the read-only

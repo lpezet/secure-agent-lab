@@ -5,8 +5,12 @@
   "description": "Everything needed to install one credential provider into a running deployment. An entry is data: holding only bank/<name>/ and a running stack must be enough to install it without reading anything else in this repo.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "summary", "min_stack", "load_band", "hosts", "broker_routes"],
+  "required": ["schema_version", "name", "summary", "min_stack", "load_band", "hosts", "broker_routes"],
   "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Generation of this manifest contract. An installer supports a fixed set and REFUSES anything higher — a manifest from the future may declare a control the installer would silently skip, and an install missing a control is worse than one that refuses to run. An integer, not a semver: this is a compatibility generation, and a minor number invites 'close enough', which is the judgement call this field exists to remove. Carried per entry rather than once for the bank because an entry must be self-describing — bank/<name>/ copied out on its own is still installable, and still says what it is. Bump on any change an installer must act on: a new field, a changed meaning, a changed directory convention. Not for rewording a description. It should move on the order of never."
+    },
     "name": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$",
