@@ -8,6 +8,67 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.10.1 — 2026-08-15
+
+Documentation and the examples. No boundary change, no image change.
+
+### Changed
+
+**Both examples repin to `v1.10.0`,** from `v1.2.0` and `v1.3.1`. An example
+several releases behind teaches an old boundary to whoever copies it, which is
+the opposite of the job: everything gained since — the profile-selection fix,
+the shared host matcher, the invariant checks, the GCP entry, the hostname
+normalisation, the baked base addons — was invisible from there.
+
+Neither vendors `000_policy.py` any more. The image carries it, the entrypoint
+loads it ahead of the mount, and a vendored copy is dead weight it warns about.
+
+**`README.md` is 71 lines shorter** and three of its sections now point instead
+of restating. One of those was not merely duplicated but wrong: *Proxy
+allowlist* still told you to copy `001_allowlist.py` into `proxy/`, unnecessary
+since 1.10.0 baked it into the image — following it would have produced exactly
+the stale vendored copy that release exists to eliminate.
+
+**The deployment template repins with each release**, so a template fetched at
+a tag names that tag. `00-config-lint` fails if it falls behind the newest
+`CHANGELOG` heading, which is what turns this from something to remember into
+something that breaks the build.
+
+### Added
+
+**`CONCEPT.md`** — the model in one place: the problem, the approach, why
+cred-gateway exists as a separate service, and what a deployment does not get
+to choose.
+
+Two things in it were not written down anywhere before. **What this does not
+protect against**, chief among them that a malicious agent can spend whatever
+it is allowed to spend — the central limitation of the design, previously left
+to be inferred, with the consequence that the real control is the scope of the
+credential the broker mints and that scope is set outside this stack. And the
+cred-gateway exposure rule as a *rule*: a route may be exposed when what it
+hands over is short-lived and scoped; a route handing over a reusable secret
+stays unexposed.
+
+It ends with the table saying which artefact is authoritative for what — the
+images, the template, the bank, `PLAYBOOK.md`, `CLAUDE.md`. That table is only
+true as of 1.10.0, which is why it arrives now: the gap it closes is the same
+one that let a deployment ship with no internal-host block, having read a
+document that said it needed to read nothing else.
+
+**`examples/README.md`** — the two examples, and the two independent axes along
+which they differ. Service count is the hardening axis; delivery mechanism is
+not, and reading them as a single scale would be wrong.
+
+**A cross-link lint.** Trading restatement for pointers only pays while the
+pointers are good, so every relative link in the top-level documents is
+asserted to resolve.
+
+### Upgrading
+
+Nothing to do.
+
+---
+
 ## 1.10.0 — 2026-08-15
 
 Two things the deployment was left to get right on its own, and should not have
