@@ -283,10 +283,33 @@ for sub in proxy broker cred-gateway; do
   printf '\n'
 done
 
-# 000_policy.py is not optional and not shipped in the image: /addons exists
-# only because the deployment mounts it, so an unvendored policy addon is a
-# control that does not exist rather than a stale one.
-if [ ! -f "$DEPLOY/proxy/000_policy.py" ]; then
+# The base addons changed hands in 1.10.0: below it the deployment vendors
+# them and an unvendored 000_policy.py is a control that does not exist; at or
+# above it the image carries them and a vendored copy is dead weight the
+# entrypoint ignores. Which of those to say depends on the pin, so derive it
+# rather than hardcoding one answer — the same per-tag derivation the lint uses
+# for the audit and hostmatch helpers.
+BAKED_ADDONS_MIN="1.10.0"
+
+# ver_ge <a> <b> — true when a >= b.
+ver_ge() { [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$2" ]; }
+
+# The pin must actually be a release tag before its ordering means anything.
+# `sort -V` puts every digit before every letter, so a branch pin like `main`
+# would otherwise compare as newer than any release and quietly stop demanding
+# the control exist. Anything unrecognised takes the vendoring branch, which is
+# the direction that fails closed.
+pin_is_tag=0
+case "$PIN" in v[0-9]*.[0-9]*.[0-9]*) pin_is_tag=1 ;; esac
+
+if [ "$pin_is_tag" = 1 ] && ver_ge "${PIN#v}" "$BAKED_ADDONS_MIN"; then
+  # At or above 1.10.0 — the image ships them.
+  for base in 000_policy.py 001_allowlist.py; do
+    if [ -f "$DEPLOY/proxy/$base" ]; then
+      note "$base" "vendored, but $PIN ships it in the image — the proxy ignores this copy"
+    fi
+  done
+elif [ ! -f "$DEPLOY/proxy/000_policy.py" ]; then
   missing "000_policy.py" "not vendored — the proxy has no internal-host block at all"
 fi
 

@@ -243,11 +243,18 @@ Produce:
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
   `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
-- `proxy/000_policy.py`, copied verbatim from `stack/proxy/addons/` at the
-  pinned tag. The image ships no addons of its own — `/addons` exists only
-  because the deployment mounts it — so an unvendored policy addon is not a
-  stale control, it is a missing one, and nothing in the stack's health will
-  say so.
+- **No `proxy/000_policy.py`.** From `v1.10.0` the proxy image carries it,
+  along with `001_allowlist.py`, at `/opt/agent-proxy/addons/` — loaded ahead
+  of whatever the deployment mounts at `/addons`. A control the deployment does
+  not get to choose belongs in the image, the same way cred-gateway bakes its
+  default-deny `nginx.conf` and takes only the allowances from a mount. Vendor
+  a copy anyway and the entrypoint warns and ignores it.
+
+  *Pinning below `v1.10.0`?* Then it is still yours to vendor, copied verbatim
+  from `stack/proxy/addons/` at the pinned tag — and an unvendored policy addon
+  is not a stale control, it is a missing one, with nothing in the stack's
+  health to say so. `scripts/check-drift.sh` reads your pin and tells you which
+  of the two you are.
 - For each requested provider, the files described under "Known providers"
   above (or "A custom provider" below, for anything else).
 - If `observer`/`log-rotator` are requested: no `networks:` entry for
@@ -269,11 +276,12 @@ from the lab regardless, because that is `secure` network isolation, which this
 flag does not touch. `scripts/check-invariants.sh` reports the opt-out as a
 finding on every run, by design — a disabled control should not be silent.
 
-- If egress filtering is requested (opt-in, off by default): copy
-  `stack/proxy/addons/001_allowlist.py` in alongside `000_policy.py`, and
-  mount the allowlist data file from a directory *other* than `proxy/` —
-  that whole directory lands at `/addons`, so a non-addon file placed in it
-  gets loaded as one:
+- If egress filtering is requested (opt-in, off by default): mount the
+  allowlist data file. The addon itself needs no copying from `v1.10.0` — it
+  is in the image, permissive and warning at startup until the data file
+  appears, which is what makes this opt-in. Mount that file from a directory
+  *other* than `proxy/`: that whole directory lands at `/addons`, so a
+  non-addon file placed in it gets loaded as one:
 
   ```yaml
   volumes:
@@ -690,8 +698,11 @@ paperwork.
    scripts/check-drift.sh --to "$NEW" --show-diff /path/to/deployment  # with hunks
    ```
 
-   It exits non-zero on drift or a missing `000_policy.py`, so it also works
-   as a pre-upgrade gate in CI. Custom providers are reported as `custom`
+   It exits non-zero on drift, and — for a pin below `v1.10.0`, where the
+   policy addon is still the deployment's to vendor — on a missing
+   `000_policy.py`. At or above that release it says the opposite, noting a
+   vendored copy the image now supersedes. Either way it also works as a
+   pre-upgrade gate in CI. Custom providers are reported as `custom`
    and don't drift-fail — they can't drift, having nothing to drift from.
 
    **They are still checked.** `check-drift.sh` now also runs
@@ -735,12 +746,19 @@ paperwork.
    diff -ru cred-gateway/ "$REF/cred-gateway/"
    ```
 
-   Then diff the addons whose upstream home is `stack/proxy/addons/` rather
-   than `examples/`. The `examples/` copies are incomplete: every example
-   vendors `000_policy.py`, none vendors `001_allowlist.py`, so a deployment
-   that enabled egress filtering sees its allowlist addon reported as
-   `Only in proxy/` — indistinguishable from a custom provider, and step 4
-   would then have you treat an upstream file as ownerless:
+   **Upgrading *to* `v1.10.0` or above: delete your vendored copies of
+   `000_policy.py` and `001_allowlist.py`.** The image carries both from that
+   release, loaded ahead of the mount, so a vendored copy is ignored — the
+   entrypoint warns and skips it by name. Leaving one in place is not
+   dangerous, just dead weight that reads as a control it no longer is.
+
+   Below `v1.10.0` they are still yours, and diffing them is a step of its
+   own, because their upstream home is `stack/proxy/addons/` rather than
+   `examples/`. The `examples/` copies are incomplete: every example vendors
+   `000_policy.py`, none vendors `001_allowlist.py`, so a deployment that
+   enabled egress filtering sees its allowlist addon reported as `Only in
+   proxy/` — indistinguishable from a custom provider, and step 4 would then
+   have you treat an upstream file as ownerless:
 
    ```bash
    diff -u proxy/000_policy.py    "/tmp/sal-$NEW/stack/proxy/addons/000_policy.py"
@@ -749,13 +767,12 @@ paperwork.
    # customization — these are upstream's files, vendored.
    ```
 
-   Note what this is *not*: the proxy image does not ship these addons and
-   the mount does not shadow them. `stack/proxy/Dockerfile` bakes in only
-   `entrypoint.sh`, `audit.py` and `hostmatch.py`; `/addons` exists solely because the
-   deployment mounts it, and `entrypoint.sh` loads whatever `*.py` it finds
-   there. So a policy addon that was never vendored isn't a stale copy
-   hiding under a mount — it is a control that does not exist, with a
-   healthy-looking proxy in front of it.
+   Note what this is *not*, below that release: the proxy image does not ship
+   these addons and the mount does not shadow them. `/addons` exists solely
+   because the deployment mounts it, and `entrypoint.sh` loads whatever `*.py`
+   it finds there. So a policy addon that was never vendored isn't a stale
+   copy hiding under a mount — it is a control that does not exist, with a
+   healthy-looking proxy in front of it. That is the gap `v1.10.0` closes.
 
    Diff from the tag each directory was last reconciled against, not from
    the tag `compose.yaml` happened to be pinned at — they differ whenever an
