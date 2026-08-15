@@ -30,6 +30,19 @@ something you ask for by name, not something the obvious command does to you.
 For the same reason `all` is fail-fast: if integration is red there is no point
 paying for e2e.
 
+## In CI
+
+`.github/workflows/tests.yml` runs the integration tier on every pull request
+and on every push to `main`, as two jobs: `lint` (the docker-free band —
+`00 05 06 07 08`) and `integration` (the whole tier).
+
+**e2e is not there, and must not be added to anything `pull_request` can
+trigger.** This is a public repo, so a fork PR that edits a test file runs
+attacker-authored code in the job — and that tier's job would be the one
+holding the dedicated App's private key. e2e belongs in its own workflow on
+`workflow_dispatch` + `schedule`. The workflow's `permissions: contents: read`
+is what keeps the PR gate credential-free by construction.
+
 ## Shared code
 
 `lib.sh` holds the assertions (`check`, `check_ne`, `check_contains`,
