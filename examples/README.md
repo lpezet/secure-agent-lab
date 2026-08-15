@@ -23,7 +23,7 @@ would be wrong, because the audit trail and the editor integration vary
 independently.
 
 **Neither is the template.** For a deployment of your own, start from
-[`template/`](../template/README.md): it ships the hardened shape, is fetched
+[`template/deployment/`](../template/deployment/README.md): it ships the hardened shape, is fetched
 by tag the way a `bank/` entry is, and is the artefact that is authoritative
 for the wiring. These two exist to be *read* — each vendors a real provider set
 you can follow end to end, and each has a README with the security checks you

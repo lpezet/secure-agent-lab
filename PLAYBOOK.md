@@ -244,7 +244,7 @@ Produce:
   `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
 
-  **Start from `template/compose.yaml` rather than writing this from
+  **Start from `template/deployment/compose.yaml` rather than writing this from
   scratch.** It is the wiring — the service graph, both networks, the volumes,
   the mounts — pinned to a release tag and fetched the same way a bank entry
   is. What this section still describes is what you drop *into* it: which

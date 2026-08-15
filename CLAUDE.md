@@ -55,7 +55,7 @@ lab            →      lab/Dockerfile                 lab/Dockerfile
 
 Which service owns a file is answered by the directory name, rather than by knowing that addons are a mitmproxy concept and providers a broker one. Keep new content under the service that consumes it.
 
-### template (`template/`)
+### template (`template/deployment/`)
 
 The deployment template — the wiring, pinned to a release tag and fetched the
 same way a `bank/` entry is: the service graph, both networks, the volumes, the
@@ -71,7 +71,7 @@ swapped — the mount paths genuinely differ. What must not diverge is the
 *shape*, so `00-config-lint` compares the two on services, per-service network
 membership, and volumes, and fails if they disagree.
 
-`template/lab/Dockerfile` is copied from `stack/lab/` rather than inheriting a
+`template/deployment/lab/Dockerfile` is copied from `stack/lab/` rather than inheriting a
 published base image, because there is no published base image — every service
 here builds from source. The lint diffs the two ignoring comments, since that
 copy is the one file in the template that can silently fall behind its own pin.
@@ -228,7 +228,7 @@ Both branch off `main` at the tag. Feature/fix branches then target whichever re
 When a release branch is ready:
 
 1. Add a `CHANGELOG.md` entry directly on the release branch (see existing entries for format — this project versions the security boundary, not the code, so most entries need no "Upgrading" section).
-1. **Repin `template/` to the version being released.** A template fetched at a tag must name that tag, or the artefact someone copied at `vX.Y.Z` builds a different release's images. `00-config-lint` fails when the template falls behind the newest `CHANGELOG` heading, so adding the entry in the step above is what surfaces this — it is a build failure rather than something to remember. The examples are deliberately *not* covered by that check: an example may lag on purpose, and the lint derives what to expect from each one's own pin (#64).
+1. **Repin `template/deployment/` to the version being released.** A template fetched at a tag must name that tag, or the artefact someone copied at `vX.Y.Z` builds a different release's images. `00-config-lint` fails when the template falls behind the newest `CHANGELOG` heading, so adding the entry in the step above is what surfaces this — it is a build failure rather than something to remember. The examples are deliberately *not* covered by that check: an example may lag on purpose, and the lint derives what to expect from each one's own pin (#64).
 2. Open a PR from the release branch into `main`, get it reviewed, merge it.
 3. Tag `vX.Y.Z` on `main`.
 4. **Sync forward only.** Merge `main` into every still-open release branch whose version is *above* the tag you just cut. Never merge it into one below. The direction is the whole rule:

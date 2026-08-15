@@ -8,10 +8,10 @@ set -uo pipefail
 cd "$REPO_ROOT"
 
 SNIPPETS=(examples/claude-code/cred-gateway/*.conf examples/dev-container/.devcontainer/cred-gateway/*.conf)
-# template/compose.yaml is in here because it is a deployment shape, not a
+# template/deployment/compose.yaml is in here because it is a deployment shape, not a
 # document about one: whatever it says is what everybody copies, so it is held
 # to every invariant a real deployment is.
-COMPOSES=(stack/compose.yaml template/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
+COMPOSES=(stack/compose.yaml template/deployment/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 
 BANK_SCHEMA="bank/schema/provider.schema.json"
 require_jq   # manifests are JSON and are read, not pattern-matched
@@ -307,7 +307,7 @@ suite "documentation cross-links resolve"
 # because the reader is now told the answer exists somewhere and cannot find
 # it. Relative links only — external URLs are not this suite's business.
 DOCS=(README.md CONCEPT.md PLAYBOOK.md CHANGELOG.md
-      bank/README.md template/README.md examples/README.md tests/README.md)
+      bank/README.md template/deployment/README.md examples/README.md tests/README.md)
 for doc in "${DOCS[@]}"; do
   [ -f "$doc" ] || { skip "$doc — not present" ""; continue; }
   bad=""
@@ -332,9 +332,9 @@ suite "the template is pinned, self-consistent and not stale"
 # has to be the tag it ships at. Three ways that goes wrong: a branch ref, a
 # mix of refs across services, and — the #64 failure mode one level up — a
 # pin that simply stopped being updated.
-TPL="template/compose.yaml"
+TPL="template/deployment/compose.yaml"
 if [ ! -f "$TPL" ]; then
-  skip "no template/compose.yaml" ""
+  skip "no template/deployment/compose.yaml" ""
 else
   tpl_refs=$(grep -ohE 'secure-agent-lab\.git#[^:]+' "$TPL" | sed 's/.*#//' | sort -u)
   tpl_count=$(printf '%s\n' "$tpl_refs" | grep -c . || true)
@@ -363,12 +363,12 @@ else
   # The lab Dockerfile is copied from stack/lab rather than inherited (there is
   # no published base image), so it is the one file here that can silently fall
   # behind the tag the rest of the template names.
-  if diff -q <(grep -vE '^\s*#|^\s*$' template/lab/Dockerfile) \
+  if diff -q <(grep -vE '^\s*#|^\s*$' template/deployment/lab/Dockerfile) \
              <(grep -vE '^\s*#|^\s*$' stack/lab/Dockerfile) >/dev/null 2>&1; then
-    ok "template/lab/Dockerfile matches stack/lab, ignoring comments"
+    ok "template/deployment/lab/Dockerfile matches stack/lab, ignoring comments"
   else
-    ko "template/lab/Dockerfile has drifted from stack/lab/Dockerfile" \
-       "$(diff -u stack/lab/Dockerfile template/lab/Dockerfile | head -20)"
+    ko "template/deployment/lab/Dockerfile has drifted from stack/lab/Dockerfile" \
+       "$(diff -u stack/lab/Dockerfile template/deployment/lab/Dockerfile | head -20)"
   fi
 fi
 
@@ -378,7 +378,7 @@ suite "the template and the reference skeleton describe the same stack"
 # (./broker), so they cannot be one file. What must not diverge is the shape —
 # which services exist, which networks each is on, which volumes there are.
 if [ ! -f "$TPL" ]; then
-  skip "no template/compose.yaml" ""
+  skip "no template/deployment/compose.yaml" ""
 elif ! python3 -c 'import yaml' 2>/dev/null; then
   skip "PyYAML unavailable — cannot compare the two service graphs" ""
 else
@@ -393,7 +393,7 @@ def shape(path):
         "volumes": sorted(d.get("volumes") or {}),
         "net_defs": sorted(d.get("networks") or {}),
     }
-a, b = shape("stack/compose.yaml"), shape("template/compose.yaml")
+a, b = shape("stack/compose.yaml"), shape("template/deployment/compose.yaml")
 for k in a:
     if a[k] != b[k]:
         print(f"{k}: stack={a[k]!r} template={b[k]!r}")
@@ -456,7 +456,7 @@ suite "audit-logs volume is wired wherever observer/log-rotator are present"
 # whichever composes actually declare an observer service, rather than a
 # fixed list that goes stale as more examples upgrade.
 AUDIT_COMPOSES=()
-for c in stack/compose.yaml template/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml; do
+for c in stack/compose.yaml template/deployment/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml; do
   grep -q '^  observer:' "$c" && AUDIT_COMPOSES+=("$c")
 done
 for conf in "${AUDIT_COMPOSES[@]}"; do
@@ -488,7 +488,7 @@ suite "the lab sets proxy env in both cases, because gRPC reads only lowercase"
 # not its gRPC ones. Measured in #48: zero flows reached the proxy with
 # uppercase alone. It also needs its own CA variable — it bundles its own roots
 # and reads none of the other three.
-for c in stack/compose.yaml template/compose.yaml examples/*/compose.yaml examples/*/.devcontainer/compose.yaml; do
+for c in stack/compose.yaml template/deployment/compose.yaml examples/*/compose.yaml examples/*/.devcontainer/compose.yaml; do
   [ -f "$c" ] || continue
   if bad=$(inv_proxy_env_case "$c"); then ok "$c — proxy env set in both cases"
   else ko "$c — gRPC would ignore the proxy" "$bad"; fi
@@ -533,8 +533,8 @@ suite "a profile the template declares is a profile .env.example enables"
 # whose loss costs the dashboard rather than the trail, and it is only
 # acceptable while the default actually enables it. Make that a build failure
 # rather than something to remember (#80).
-TPL_COMPOSE="template/compose.yaml"
-TPL_ENV="template/.env.example"
+TPL_COMPOSE="template/deployment/compose.yaml"
+TPL_ENV="template/deployment/.env.example"
 if [ ! -f "$TPL_COMPOSE" ] || [ ! -f "$TPL_ENV" ]; then
   skip "no template to check" ""
 elif ! python3 -c 'import yaml' 2>/dev/null; then
@@ -542,7 +542,7 @@ elif ! python3 -c 'import yaml' 2>/dev/null; then
 else
   declared=$(python3 - <<'PYEOF'
 import yaml
-d = yaml.safe_load(open("template/compose.yaml")) or {}
+d = yaml.safe_load(open("template/deployment/compose.yaml")) or {}
 out = set()
 for svc in (d.get("services") or {}).values():
     out.update(svc.get("profiles") or [])
@@ -558,7 +558,7 @@ PYEOF
         ok "$TPL_ENV enables the '$prof' profile"
       else
         ko "$TPL_ENV does not enable the '$prof' profile" \
-           "template/compose.yaml declares it, so shipping without it turns the service off silently"
+           "template/deployment/compose.yaml declares it, so shipping without it turns the service off silently"
       fi
     done
   fi
