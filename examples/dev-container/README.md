@@ -93,7 +93,8 @@ Run these from inside the lab container (`docker compose -f .devcontainer/compos
 curl -s --max-time 2 http://broker:8080/healthz
 # → curl: (6) Could not resolve host  OR  (28) Connection timed out
 
-# 2. Proxy must block tunnelled requests to broker (000_policy.py)
+# 2. Proxy must block tunnelled requests to broker (000_policy.py, shipped
+#    in the proxy image since v1.10.0 — there is no copy in proxy/ to check)
 curl -s -o /dev/null -w "%{http_code}" --proxy http://proxy:8080 http://broker:8080/healthz
 # → 403
 

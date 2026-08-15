@@ -58,7 +58,7 @@ On startup `lab/entrypoint.sh` calls `setup.sh`, which:
 
 ## Audit logging
 
-`broker` and `proxy` are built from a stack image (`v1.2.0`) that includes the audit
+`broker` and `proxy` are built from a stack image (`v1.10.0`) that includes the audit
 helpers (`audit.js`/`audit.py`), and this example's own provider/addon files call them —
 that's what lets `broker`/`proxy`/`cred-gateway` write a structured, secret-free JSONL
 trail of what got injected, blocked, or issued. But unlike `examples/dev-container`, this
@@ -131,7 +131,8 @@ Run these from inside the container (`docker compose exec lab bash`):
 curl -s --max-time 2 http://broker:8080/healthz
 # → curl: (6) Could not resolve host  OR  (28) Connection timed out
 
-# 2. Proxy must block tunnelled requests to broker (000_policy.py)
+# 2. Proxy must block tunnelled requests to broker (000_policy.py, shipped
+#    in the proxy image since v1.10.0 — there is no copy in proxy/ to check)
 curl -s -o /dev/null -w "%{http_code}" --proxy http://proxy:8080 http://broker:8080/healthz
 # → 403
 

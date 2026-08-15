@@ -104,8 +104,10 @@ from the host, not from `lab` or `secure`, so it cannot become a new channel bet
 `log-rotator` keeps the files bounded with `logrotate`.
 
 On by default in [`template/`](template/README.md) and in the VS Code dev container example
-below. Not yet wired into `examples/claude-code` — pending its own repin to a release that
-carries this. (`stack/CLAUDE.md` has a smoke-test walkthrough that needs no real credentials.)
+below. Deliberately absent from `examples/claude-code`, which is the smaller shape: the audit
+helpers are opt-in and no-op without `AUDIT_LOG`, so dropping the trail means dropping
+`observer`, `log-rotator` and the `audit-logs` volume together rather than half-configuring
+them. (`stack/CLAUDE.md` has a smoke-test walkthrough that needs no real credentials.)
 
 ## Quick start
 
