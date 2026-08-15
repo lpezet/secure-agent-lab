@@ -21,6 +21,11 @@ mkdep() {
   local d="$TMPD/$1"
   mkdir -p "$d"/{proxy,broker,cred-gateway}
   cp "$EX"/proxy/*.py "$d/proxy/"
+  # Both base addons come from stack/proxy/addons/ explicitly. This fixture is
+  # a deployment pinned at v1.3.1, which is below the release that put them in
+  # the image, so it vendors them — and since #64 repinned the examples to
+  # v1.10.0 they no longer carry 000_policy.py to be picked up incidentally.
+  cp "$REPO_ROOT"/stack/proxy/addons/000_policy.py "$d/proxy/"
   cp "$REPO_ROOT"/stack/proxy/addons/001_allowlist.py "$d/proxy/"
   cp "$EX"/broker/*.js "$d/broker/"
   cp "$EX"/cred-gateway/*.conf "$d/cred-gateway/"
@@ -121,6 +126,10 @@ suite "the other example is matched when it is the source"
 d="$TMPD/devc"
 mkdir -p "$d"/{proxy,broker,cred-gateway}
 cp "$REPO_ROOT"/examples/dev-container/.devcontainer/proxy/*.py "$d/proxy/"
+# Same reason as mkdep: the compose.yaml this fixture borrows is pinned v1.3.1,
+# so the vendored policy addon is the correct shape for it, and the example
+# stopped carrying one at v1.10.0.
+cp "$REPO_ROOT"/stack/proxy/addons/000_policy.py "$d/proxy/"
 cp "$REPO_ROOT"/examples/dev-container/.devcontainer/broker/*.js "$d/broker/"
 cp "$REPO_ROOT"/examples/dev-container/.devcontainer/cred-gateway/*.conf "$d/cred-gateway/"
 cp "$TMPD/clean/compose.yaml" "$d/compose.yaml"
