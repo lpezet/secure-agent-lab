@@ -146,7 +146,7 @@ down three times. Each answers one question:
 | artefact | authoritative for |
 |---|---|
 | **the images** | mandatory mechanism — the controls a deployment does not get to choose |
-| **[`template/`](template/README.md)** | the wiring: service graph, networks, volumes, mounts |
+| **[`template/deployment/`](template/deployment/README.md)** | the wiring: service graph, networks, volumes, mounts |
 | **[`bank/`](bank/README.md)** | optional providers, installable as data |
 | **[`PLAYBOOK.md`](PLAYBOOK.md)** | what none of those can carry — writing a provider from scratch, and upgrading |
 | **[`CLAUDE.md`](CLAUDE.md)** | maintainer-facing invariants of this repo |

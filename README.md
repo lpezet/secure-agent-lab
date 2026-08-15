@@ -16,7 +16,9 @@ deciding whether this fits your problem. This file is the tour.
 stack/          Core reusable infrastructure (broker, proxy, cred-gateway, observer,
                 log-rotator, base lab image) — the images, and the only place a
                 mandatory control lives
-template/       The deployment template: the wiring, pinned by tag. Start here.
+template/
+  deployment/    The deployment template: the wiring, pinned by tag. Start here.
+  provider/      Skeletons for writing a bank entry of your own
 bank/           Vetted credential providers, installed as data rather than written
 examples/       Two working deployments to read — see examples/README.md for how
                 they differ
@@ -92,7 +94,7 @@ injected, blocked, or issued, never a credential value — to a shared `audit-lo
 from the host, not from `lab` or `secure`, so it cannot become a new channel between the two).
 `log-rotator` keeps the files bounded with `logrotate`.
 
-On by default in [`template/`](template/README.md) and in the VS Code dev container example
+On by default in [`template/deployment/`](template/deployment/README.md) and in the VS Code dev container example
 below. Deliberately absent from `examples/claude-code`, which is the smaller shape: the audit
 helpers are opt-in and no-op without `AUDIT_LOG`, so dropping the trail means dropping
 `observer`, `log-rotator` and the `audit-logs` volume together rather than half-configuring
@@ -102,7 +104,7 @@ them. (`stack/CLAUDE.md` has a smoke-test walkthrough that needs no real credent
 
 ### Build your own deployment
 
-[`template/`](template/README.md) is the wiring, pinned to a release tag and fetched the same
+[`template/deployment/`](template/deployment/README.md) is the wiring, pinned to a release tag and fetched the same
 way a `bank/` entry is. It ships the hardened shape — audit trail on, `lab` network internal,
 allowlist mounted — because it is the thing people copy, and it is easier to notice a control
 you removed than one you never had.
@@ -110,7 +112,7 @@ you removed than one you never had.
 ```bash
 git clone --depth 1 --branch v1.10.2 \
   https://github.com/lpezet/secure-agent-lab.git /tmp/sal
-cp -r /tmp/sal/template ./my-deployment && cd ./my-deployment
+cp -r /tmp/sal/template/deployment ./my-deployment && cd ./my-deployment
 cp .env.example .env && $EDITOR .env
 docker compose up -d
 ```
@@ -167,7 +169,7 @@ is nothing to copy — so all a deployment supplies is the data:
       - ./allowlist:/etc/agent-allowlist:ro
 ```
 
-[`template/allowlist`](template/allowlist) ships this mount already wired, with the file
+[`template/deployment/allowlist`](template/deployment/allowlist) ships this mount already wired, with the file
 present and empty of entries. The list must sit **outside** `proxy/`, because that directory
 is mounted wholesale as `/addons` — a data file placed there would be loaded as an addon.
 

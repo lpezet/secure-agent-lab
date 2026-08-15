@@ -6,7 +6,7 @@
 #
 #   git clone --depth 1 --branch v1.10.2 \
 #     https://github.com/lpezet/secure-agent-lab.git /tmp/sal
-#   cp -r /tmp/sal/template ./my-deployment
+#   cp -r /tmp/sal/template/deployment ./my-deployment
 #   cp -r /tmp/sal/bank/github/broker/*.js        ./my-deployment/broker/
 #   cp -r /tmp/sal/bank/github/proxy/*.py         ./my-deployment/proxy/
 #   cp -r /tmp/sal/bank/github/cred-gateway/*.conf ./my-deployment/cred-gateway/

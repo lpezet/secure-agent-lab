@@ -23,7 +23,7 @@
 # examples/dev-container are smaller, and vendor a github.js provider and a
 # github.conf snippet you can read.
 #
-# 00-config-lint asserts this file and template/compose.yaml agree on which
+# 00-config-lint asserts this file and template/deployment/compose.yaml agree on which
 # services exist, which networks each is on, and which volumes there are — the
 # shape can't drift even though the mount paths differ.
 name: example-of-compose-file
