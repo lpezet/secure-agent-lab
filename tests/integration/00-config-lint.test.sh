@@ -300,6 +300,33 @@ for d in examples/*/proxy examples/*/.devcontainer/proxy; do
   fi
 done
 
+suite "documentation cross-links resolve"
+# #65 split one overlapping pile of prose into documents that point at each
+# other instead of restating each other. That trade only pays while the
+# pointers are good: a dangling link is worse than the duplication it replaced,
+# because the reader is now told the answer exists somewhere and cannot find
+# it. Relative links only — external URLs are not this suite's business.
+DOCS=(README.md CONCEPT.md PLAYBOOK.md CHANGELOG.md
+      bank/README.md template/README.md examples/README.md tests/README.md)
+for doc in "${DOCS[@]}"; do
+  [ -f "$doc" ] || { skip "$doc — not present" ""; continue; }
+  bad=""
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    case "$target" in
+      http*|"#"*|mailto:*) continue ;;
+    esac
+    # Strip any #anchor, then resolve relative to the document's directory.
+    path="${target%%#*}"
+    [ -n "$path" ] || continue
+    resolved="$(dirname "$doc")/$path"
+    [ -e "$resolved" ] || bad="${bad}${target} -> ${resolved}"$'\n'
+  done < <(grep -oE '\]\([^)]+\)' "$doc" | sed 's/^](//; s/)$//')
+  bad=$(printf '%s' "$bad" | grep -v '^$' || true)
+  if [ -z "$bad" ]; then ok "$doc — every relative link resolves"
+  else ko "$doc — dangling relative link(s)" "$bad"; fi
+done
+
 suite "the template is pinned, self-consistent and not stale"
 # The template is fetched by tag the way bank/<name>/ is, so the tag inside it
 # has to be the tag it ships at. Three ways that goes wrong: a branch ref, a

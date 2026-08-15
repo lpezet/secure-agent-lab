@@ -28,9 +28,9 @@ then set that provider's variables in `.env` and put its credential file in
 ## What this is authoritative for
 
 The **wiring**: the service graph, the two networks, the volumes and the
-mounts. Not the providers (that is `bank/`), not the mechanism (that is the
-images), and not how to write a provider from scratch (that is
-[`PLAYBOOK.md`](../PLAYBOOK.md)).
+mounts. That is one row of the table in
+[`CONCEPT.md`](../CONCEPT.md#which-document-is-authoritative), which says what
+each of the other artefacts owns.
 
 ## What you cannot switch off here
 
