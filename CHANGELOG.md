@@ -8,6 +8,65 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.10.2 — 2026-08-15
+
+Two knobs on the deployment template, for running more than one stack on a
+machine. No boundary change.
+
+### Changed
+
+**The observer's host port is parameterised**:
+`"127.0.0.1:${OBSERVER_PORT-9000}:9000"`. The no-colon form is deliberate — an
+*unset* variable takes 9000, an *empty* one stays empty and Docker assigns a
+free port. So a template copied and run as before behaves exactly as before,
+and two deployments on one machine stop colliding without anyone having to
+choose and remember a port number per stack.
+
+The `127.0.0.1` prefix is literal and comes first, so no value of
+`OBSERVER_PORT` can move the dashboard off loopback. That is the property that
+makes publishing it acceptable at all: the observer serves the audit trail over
+plain HTTP with no auth.
+
+**`observer` sits behind a compose profile**, enabled by `COMPOSE_PROFILES` in
+`.env.example`. The default is unchanged — the template still ships with the
+audit trail on — but turning the dashboard off is now a value rather than an
+edit. Deleting the service block made a deployment that had merely switched a
+feature off look like one that had diverged from its template, to
+`check-drift.sh` and to the graph comparison in `00-config-lint`.
+
+Only the viewer is optional. The three services that *write* the trail and
+`log-rotator` which bounds it are unprofiled, so this costs the dashboard and
+never the audit trail.
+
+Both reported from the [`sal`](https://github.com/lpezet/secure-agent-lab-cli)
+side, where a lab runs per project rather than per machine (#79, #80).
+
+### Fixed
+
+**The observer-port lint asserted a literal mapping** (`"127.0.0.1:9000:9000"`)
+and so would have rejected any legitimate port choice, including this one. It
+now asserts the `127.0.0.1:` prefix — the part no deployment may choose — and
+leaves the number alone.
+
+### Added
+
+**A lint on declared-but-unenabled profiles.** Compose reads an absent
+`COMPOSE_PROFILES` as "no profiles enabled", so a profiled service that nothing
+turns on is silently missing. `00-config-lint` now fails when
+`template/compose.yaml` declares a profile that `template/.env.example` does
+not enable — the difference between a convention and something that holds.
+
+### Upgrading
+
+Nothing to do. A deployment already running keeps its `ports:` line and needs
+no `COMPOSE_PROFILES`; both changes are to the template rather than to any
+image.
+
+To pick them up in an existing deployment, take the `observer` block and the
+two `.env.example` entries from `template/` at this tag.
+
+---
+
 ## 1.10.1 — 2026-08-15
 
 Documentation and the examples. No boundary change, no image change.
