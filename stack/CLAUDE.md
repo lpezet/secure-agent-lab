@@ -1,6 +1,11 @@
 
 ## Commands
 
+**This directory is the image source, not a deployment.** `compose.yaml` here
+mounts the repo layout and builds from local paths, which is what makes it
+useful for testing image changes and useless as something to copy. The
+deployment template is `template/`.
+
 **Bring up the full stack (from repo root, outside the container):**
 ```bash
 docker compose -f compose.yaml up --build
