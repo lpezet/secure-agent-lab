@@ -103,14 +103,34 @@ injected, blocked, or issued, never a credential value — to a shared `audit-lo
 from the host, not from `lab` or `secure`, so it cannot become a new channel between the two).
 `log-rotator` keeps the files bounded with `logrotate`.
 
-Available in `stack/compose.yaml` (see `stack/CLAUDE.md` for a smoke-test walkthrough that
-needs no real credentials) and in the VS Code dev container example below. Not yet wired into
-`examples/claude-code` — pending its own repin to a release that carries this.
+On by default in [`template/`](template/README.md) and in the VS Code dev container example
+below. Not yet wired into `examples/claude-code` — pending its own repin to a release that
+carries this. (`stack/CLAUDE.md` has a smoke-test walkthrough that needs no real credentials.)
 
 ## Quick start
 
-Each example is self-contained. See its README for prerequisites, credential setup, and
-security boundary tests.
+### Build your own deployment
+
+[`template/`](template/README.md) is the wiring, pinned to a release tag and fetched the same
+way a `bank/` entry is. It ships the hardened shape — audit trail on, `lab` network internal,
+allowlist mounted — because it is the thing people copy, and it is easier to notice a control
+you removed than one you never had.
+
+```bash
+git clone --depth 1 --branch v1.10.0 \
+  https://github.com/lpezet/secure-agent-lab.git /tmp/sal
+cp -r /tmp/sal/template ./my-deployment && cd ./my-deployment
+cp .env.example .env && $EDITOR .env
+docker compose up -d
+```
+
+That comes up with no credentials and the boundary intact; add one by copying a
+[`bank/`](bank/README.md) entry into `broker/`, `proxy/` and `cred-gateway/`.
+
+### Or start from an example
+
+Each is self-contained and smaller than the template. See its README for prerequisites,
+credential setup, and security boundary tests.
 
 ### VS Code dev container
 

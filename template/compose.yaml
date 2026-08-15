@@ -1,0 +1,236 @@
+# The deployment template.
+#
+# Copy this directory, fill in .env, drop in the providers you want, and run
+# `docker compose up -d`. It is pinned to a release tag, so what it builds is
+# fixed until you repin it deliberately — the same contract bank/<name>/ has.
+#
+#   git clone --depth 1 --branch v1.10.0 \
+#     https://github.com/lpezet/secure-agent-lab.git /tmp/sal
+#   cp -r /tmp/sal/template ./my-deployment
+#   cp -r /tmp/sal/bank/github/broker/*.js        ./my-deployment/broker/
+#   cp -r /tmp/sal/bank/github/proxy/*.py         ./my-deployment/proxy/
+#   cp -r /tmp/sal/bank/github/cred-gateway/*.conf ./my-deployment/cred-gateway/
+#   cp ./my-deployment/.env.example ./my-deployment/.env && $EDITOR ...
+#
+# Three mount points are the seams where you supply content, and they are
+# empty here on purpose:
+#
+#   ./broker       → /app/providers          credential providers, one per file
+#   ./proxy        → /addons                 injection addons, one per file
+#   ./cred-gateway → /etc/nginx/gateway.d    whitelist snippets
+#
+# With none of them populated the stack still comes up and the boundary still
+# holds — it just has no credentials to spend. The broker answers 404 on every
+# credential route and cred-gateway denies everything but /healthz.
+#
+# WHAT YOU CANNOT TURN OFF, because it is in the images rather than here: the
+# proxy's internal-host block and egress allowlist (000_policy.py,
+# 001_allowlist.py, baked in since v1.10.0) and cred-gateway's default-deny.
+# Mounting an empty ./proxy does not disable the first two. That was not always
+# true — see issue #62.
+#
+# This ships the hardened shape deliberately: audit trail on, lab network
+# internal, allowlist file mounted. Strip what you do not want; it is easier to
+# notice a control you removed than one you never had. examples/ has the
+# smaller shapes.
+name: secure-agent-lab
+
+services:
+  broker:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.10.0:stack/broker
+    volumes:
+      # The credential directory. Read-only, and the only place secrets live.
+      - ${AGENT_CREDS_DIR:-${HOME}/.config/agent-creds}:/secrets:ro
+      - ./broker:/app/providers:ro
+      - audit-logs:/var/log/audit
+    env_file: .env
+    environment:
+      # Paths inside the container, matching the file names in the credential
+      # directory above. A provider that finds no file simply does not serve
+      # its route; nothing here is required.
+      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
+      ANTHROPIC_API_KEY_PATH: /secrets/anthropic.key
+      ANTHROPIC_AUTH_TOKEN_PATH: /secrets/anthropic-auth.token
+      CLOUDFLARE_MINTER_TOKEN_PATH: /secrets/cloudflare-minter.token
+      GCP_ADC_PATH: /secrets/gcp-adc.json
+      # Must match the proxy's CLOUDFLARE_PROFILE. The broker mints this
+      # profile and refuses any other, so the lab cannot ask its way into a
+      # wider one.
+      CLOUDFLARE_PROFILE: ${CLOUDFLARE_PROFILE:-workers-deploy}
+      AUDIT_LOG: /var/log/audit/broker.jsonl
+    networks: [secure]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:8080/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  proxy:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.10.0:stack/proxy
+    depends_on:
+      broker:
+        condition: service_healthy
+    volumes:
+      - ./proxy:/addons:ro
+      - proxy-certs:/home/mitmproxy/.mitmproxy
+      - audit-logs:/var/log/audit
+      # The egress allowlist. Mounted from OUTSIDE ./proxy on purpose: that
+      # whole directory lands at /addons, so a data file placed in it would be
+      # loaded as an addon. With no such file the proxy permits every
+      # destination and warns at startup — a half-enabled allowlist fails open,
+      # which is why this line ships uncommented.
+      - ./allowlist:/etc/agent-allowlist:ro
+    environment:
+      BROKER_URL: http://broker:8080
+      # Which hostnames the policy addon refuses to forward to. Rename your
+      # services and this is where you say so. Deployment config, never
+      # anything the lab container can influence.
+      POLICY_INTERNAL_HOSTS: ${POLICY_INTERNAL_HOSTS:-broker,cred-gateway}
+      # Which Cloudflare profile the addon injects for. Deployment config, not
+      # something the lab container may influence — see bank/cloudflare/.
+      CLOUDFLARE_PROFILE: ${CLOUDFLARE_PROFILE:-workers-deploy}
+      # Which service account the GCP addon mints for — see bank/gcp/.
+      GCP_SERVICE_ACCOUNT: ${GCP_SERVICE_ACCOUNT:-}
+      AUDIT_LOG: /var/log/audit/proxy.jsonl
+    networks: [secure, lab]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem",
+        ]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  cred-gateway:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.10.0:stack/cred-gateway
+    depends_on:
+      broker:
+        condition: service_healthy
+    volumes:
+      # Whitelisted endpoints. This directory must sit outside anything the lab
+      # container can write to, or the lab could widen its own whitelist.
+      - ./cred-gateway:/etc/nginx/gateway.d:ro
+      - audit-logs:/var/log/audit
+    networks: [secure, lab]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    restart: unless-stopped
+
+  # Reads the audit-logs volume and serves a live view of it on :9000. Not on
+  # the `secure` or `lab` network (no `networks:` key — that is deliberate, so
+  # the audit trail cannot become a channel between them), and its published
+  # port is loopback-only: viewable from the host, not from inside the stack.
+  observer:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.10.0:stack/observer
+    volumes:
+      - audit-logs:/var/log/audit:ro
+    ports:
+      - "127.0.0.1:9000:9000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:9000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Rotates the JSONL files on the shared volume and fixes the volume's
+  # permissions on every start, so broker (`node`) and proxy (`mitmproxy`) —
+  # different non-root uids sharing one directory — can both write to it. Runs
+  # as root for exactly that reason; needs no network of its own either.
+  log-rotator:
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.10.0:stack/log-rotator
+    volumes:
+      - audit-logs:/var/log/audit
+    restart: unless-stopped
+
+  # The only image you build yourself: what the agent needs is yours to decide.
+  # ./lab/Dockerfile extends the stack's base image.
+  lab:
+    build: ./lab
+    depends_on:
+      proxy:
+        condition: service_healthy
+      cred-gateway:
+        condition: service_healthy
+    volumes:
+      - proxy-certs:/proxy-certs:ro
+      # The project the agent works on. Point this wherever you like — it is
+      # the one mount whose contents the agent can write.
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+    environment:
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      NO_PROXY: localhost,127.0.0.1,cred-gateway
+      # Both cases, and not for tidiness. gRPC reads `grpc_proxy`, `https_proxy`
+      # and `http_proxy` — lowercase only — so with the uppercase forms alone a
+      # gRPC client ignores the proxy entirely. Measured in #48: zero flows
+      # reached the proxy with uppercase set, two with lowercase.
+      http_proxy: http://proxy:8080
+      https_proxy: http://proxy:8080
+      no_proxy: localhost,127.0.0.1,cred-gateway
+      NODE_EXTRA_CA_CERTS: /proxy-certs/mitmproxy-ca-cert.pem
+      REQUESTS_CA_BUNDLE: /proxy-certs/mitmproxy-ca-cert.pem
+      SSL_CERT_FILE: /proxy-certs/mitmproxy-ca-cert.pem
+      # gRPC bundles its own roots and reads none of the three above. Without
+      # this it does not fail with a TLS error, it retries and hangs.
+      GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: /proxy-certs/mitmproxy-ca-cert.pem
+      GIT_CREDENTIAL_URL: http://cred-gateway/github/credential
+      GITHUB_IDENTITY_URL: http://cred-gateway/github/identity
+      # Dummy values, never real ones. They exist so a client's "am I
+      # authenticated?" check passes; the proxy strips them at the wire and
+      # injects the real credential. A real value here would be a credential
+      # sitting inside the container the agent controls.
+      ANTHROPIC_API_KEY: proxy-injected
+      GH_TOKEN: proxy-injected
+      CLOUDFLARE_API_TOKEN: proxy-injected
+    networks: [lab]
+    command: sleep infinity
+    restart: unless-stopped
+
+networks:
+  # secure is NOT internal: the broker calls api.github.com and
+  # api.cloudflare.com directly, and the proxy reaches every provider through
+  # it. The lab container is never on this network.
+  secure:
+    driver: bridge
+  # lab IS internal by default: no default gateway, so the only way out is a
+  # container on this network — the proxy. That is what makes the egress
+  # allowlist enforcing rather than advisory; without it, HTTP_PROXY is a
+  # request the agent can decline with `curl --noproxy '*'`.
+  #
+  # Set LAB_INTERNAL=false to opt out. It costs you egress mediation and
+  # nothing else — the broker stays unreachable either way, because that is
+  # `secure` network isolation, which this flag does not touch. The reason to
+  # do it is tooling that cannot use an HTTP proxy at all: raw sockets, ssh,
+  # anything that resolves before proxying. check-invariants.sh reports the
+  # opt-out on every run, by design — a disabled control should not be silent.
+  lab:
+    driver: bridge
+    internal: ${LAB_INTERNAL:-true}
+
+volumes:
+  proxy-certs:
+  audit-logs:

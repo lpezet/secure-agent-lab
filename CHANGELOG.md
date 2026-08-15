@@ -8,6 +8,97 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.10.0 — 2026-08-15
+
+Two things the deployment was left to get right on its own, and should not have
+been: the controls it must not be able to omit, and the wiring it had to
+reconstruct from three disagreeing candidates.
+
+### Added
+
+**The proxy image carries `000_policy.py` and `001_allowlist.py`.** A consumer
+built a deployment with an empty `proxy/` directory — reasonable logic, since
+the bank supplies proxy addons and a fresh lab has installed none — and from
+inside the lab container got a real credential back:
+
+```
+curl http://cred-gateway/anthropic/cred   → 403     (the route is not exposed)
+curl http://broker:8080/anthropic/cred    → {"type":"auth_token","value":"sk-ant-oat01-…"}
+```
+
+cred-gateway did its job. It is not the only path to the broker: the proxy sits
+on both networks, and with no policy addon loaded it forwards.
+
+The requirement *was* documented, and mechanically checked twice. None of it
+reached them, because all of it lives in the half of the repo addressed to
+whoever *writes* a deployment, while `bank/README.md` advertises a bar saying
+you need not read it. **A mandatory control whose enforcement depends on the
+deployment having copied a file is not mandatory**, and documenting it harder
+was the fix that had already been tried three times.
+
+So: a control the deployment does not get to choose belongs in the image. Not
+a new principle — `stack/cred-gateway/Dockerfile` bakes `nginx.conf` in
+precisely so its default-deny cannot be substituted at runtime, taking only the
+*allowances* from a mount.
+
+Both addons are baked to `/opt/agent-proxy/addons/` — **not** `/addons`, which a
+deployment's bind mount replaces wholesale — and loaded ahead of it. A vendored
+copy is skipped with a warning naming the file; the image's copy wins. Load
+order stops being alphabetical luck: policy runs first by construction.
+
+`001_allowlist.py`'s semantics are unchanged: still gated on a mounted
+`/etc/agent-allowlist`, still permissive-with-a-warning without one. What
+baking removes is the copy-from-the-right-tag hazard this changelog used to
+warn about by hand.
+
+**`POLICY_INTERNAL_HOSTS`** on the proxy service, default `broker,cred-gateway`,
+for stacks that rename their services. Deployment config, never request data —
+the rule that took `X-Cf-Profile` out of the Cloudflare addon.
+
+**`template/` — the deployment template.** The wiring, pinned to a release tag
+and fetched the same way a `bank/` entry is: the service graph, both networks,
+the volumes, the mounts. It ships the hardened shape — audit trail on, `lab`
+network internal, allowlist file mounted — because it is the thing people copy,
+and a control you removed is easier to notice than one you never had.
+
+It exists because "what does a deployment look like" had three answers and no
+authority: a reference skeleton whose own header says it will not work as-is,
+and two examples pinned several releases back. A downstream tool had written
+its own service graph to fill the gap, which put a change to *this* stack's
+wiring behind a release of a different repo.
+
+`stack/compose.yaml` stays, and stays the maintainer's file: it mounts the repo
+layout because it sits beside the image sources, where a deployment mounts
+`./broker` and `./proxy` directly. The two cannot be one file. `00-config-lint`
+compares their service graphs — services, per-service network membership,
+volumes — so the shape cannot drift even though the mount paths differ.
+
+### Changed
+
+**`scripts/check-drift.sh` reads your pin and inverts around this release.**
+Below `v1.10.0` an unvendored `000_policy.py` is a missing control and it
+hard-fails. At or above, the image carries it and a vendored copy is a note —
+dead weight the entrypoint ignores. A pin that is not a release tag takes the
+vendoring branch, because that is the direction that fails closed.
+
+**`scripts/check-invariants.sh` downgrades that check to a note.** It documents
+that it reads no upstream and no pinned tag, and this question now needs one.
+Ordering — a vendored policy addon must still load first — stays a failure, and
+is now actually asserted; the suite that claimed to cover it never did.
+
+### Upgrading
+
+**Delete your vendored `proxy/000_policy.py` and `proxy/001_allowlist.py`** once
+you repin to `v1.10.0`. They are ignored either way, so this is tidying rather
+than a fix — but a file that reads as a control it no longer is will mislead
+whoever reads it next. `scripts/check-drift.sh` names them.
+
+Nothing else. If you vendored a *modified* policy addon, note that the image's
+copy now wins: move whatever you changed into `POLICY_INTERNAL_HOSTS`, or say
+so on an issue if that is not enough to express it.
+
+---
+
 ## 1.9.2 — 2026-08-15
 
 A security fix. **An uppercased hostname bypassed the internal-host block

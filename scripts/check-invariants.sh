@@ -110,11 +110,19 @@ for c in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
   [ -f "$DEPLOY/$c" ] && scan_file "$DEPLOY/$c"
 done
 
-# Directory-level: the policy addon must load first, and must exist at all.
+# Directory-level: if the deployment vendors a policy addon, it must load first.
+#
+# Whether it must be there at all stopped being answerable here in 1.10.0. The
+# proxy image carries 000_policy.py from that release on, so an absent copy is
+# correct at or above it and a missing control below it — and the difference is
+# the deployment's pin, which this script deliberately does not read (see the
+# header: no upstream, no pinned tag, no network). check-drift.sh does know the
+# pin and now says which case a deployment is in. What is left here is a note,
+# so the signal does not vanish entirely for someone running only this script.
 if [ -d "$DEPLOY/proxy" ]; then
   if [ ! -f "$DEPLOY/proxy/000_policy.py" ]; then
     printf '  %sproxy/%s\n' "$B" "$N"
-    fail_f "$(printf '%-6s %s' '' '000_policy.py is absent — nothing blocks requests to broker or cred-gateway')"
+    note_f "$(printf '%-6s %s' '' '000_policy.py is not vendored — correct if you pin v1.10.0 or above (the image ships it), a missing internal-host block if you pin below. check-drift.sh reads your pin and will say which.')"
     printf '\n'
   elif out=$(inv_policy_addon_first "$DEPLOY/proxy"); then :
   else

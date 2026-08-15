@@ -55,6 +55,32 @@ lab            →      lab/Dockerfile                 lab/Dockerfile
 
 Which service owns a file is answered by the directory name, rather than by knowing that addons are a mitmproxy concept and providers a broker one. Keep new content under the service that consumes it.
 
+### template (`template/`)
+
+The deployment template — the wiring, pinned to a release tag and fetched the
+same way a `bank/` entry is: the service graph, both networks, the volumes, the
+mounts. It ships the **hardened** shape (audit trail on, `lab` internal,
+allowlist mounted) because it is what people copy, and a removed control is
+easier to notice than one that was never there.
+
+**Two compose files on purpose, and not a duplication to "fix".**
+`stack/compose.yaml` mounts the repo layout (`./broker/providers`,
+`./proxy/addons`) because it sits beside the image sources; a deployment mounts
+`./broker` and `./proxy` directly. They cannot be one file with the build refs
+swapped — the mount paths genuinely differ. What must not diverge is the
+*shape*, so `00-config-lint` compares the two on services, per-service network
+membership, and volumes, and fails if they disagree.
+
+`template/lab/Dockerfile` is copied from `stack/lab/` rather than inheriting a
+published base image, because there is no published base image — every service
+here builds from source. The lint diffs the two ignoring comments, since that
+copy is the one file in the template that can silently fall behind its own pin.
+
+The template's pin is checked three ways: every service names the same ref, the
+ref is a release tag rather than a branch, and it is not older than the newest
+`CHANGELOG.md` heading. That last one is the `examples/` staleness problem
+(#64) caught one level up — repin the template as part of cutting a release.
+
 ### broker (`stack/broker/`)
 
 Node.js HTTP server on `:8080`. Reads credentials from `/secrets` (bind-mounted from `~/.config/agent-creds/` on the host, read-only).
@@ -77,9 +103,11 @@ The broker makes direct outbound HTTPS calls to `api.github.com` and `api.cloudf
 
 ### proxy (`stack/proxy/`)
 
-mitmproxy with addons in `stack/proxy/addons/`, bind-mounted into the container at `/addons/`. `entrypoint.sh` globs `*.py` files from that directory at startup and passes them to `mitmdump` in alphabetical order — dropping a new addon file and restarting the container is sufficient to load it. Numeric prefixes control load order. Current addons:
+mitmproxy with addons from two places. `entrypoint.sh` passes the **baked** ones at `/opt/agent-proxy/addons/` to `mitmdump` first, then globs `*.py` from the deployment's bind mount at `/addons/` in alphabetical order, skipping any file whose basename it already loaded and warning by name. Dropping a new addon file into the mount and restarting the container is sufficient to load it; numeric prefixes control load order *within* the mount, but the base addons are first by construction rather than by alphabetical luck.
 
-- **`000_policy.py`** — blocks any request destined for `broker` or `cred-gateway` hostnames (defense-in-depth; Docker network isolation is the primary control). Must load first.
+`000_policy.py` and `001_allowlist.py` are baked in as of 1.10.0 (#62). Not into `/addons` — a bind mount replaces that directory wholesale, which is exactly how a deployment with an empty `proxy/` ran with no internal-host block at all and could reach `broker:8080/anthropic/cred` through the proxy. A control the deployment does not get to choose belongs in the image; see `cred-gateway`'s baked `nginx.conf` for the same shape. Current addons:
+
+- **`000_policy.py`** — baked in. Blocks any request destined for `broker` or `cred-gateway` hostnames, or whatever `POLICY_INTERNAL_HOSTS` names instead. Loads first. On the path it covers — a request *through* the proxy, which sits on both networks — it is the only control, not a second layer behind Docker network isolation; that isolation stops the lab routing to the broker directly, and does nothing about the proxy being asked to.
 - **`010_github.py`** — matches `api.github.com` and `uploads.github.com` only. Fetches token from broker, injects as `Authorization: token ...`. Strips whatever the client sent. **Does not match `github.com`** — git push/pull goes through the credential helper path, not here.
 - **`020_anthropic.py`** — matches `api.anthropic.com`. Injects the API key. Blocks `/v1/organizations/*` (Admin API). Uses `responseheaders` hook + `flow.response.stream = True` for SSE to avoid buffering streamed responses.
 - **`030_cloudflare.py`** — matches `api.cloudflare.com`. Injects a scoped token. Which profile comes from `CLOUDFLARE_PROFILE` on the proxy service (default `workers-deploy`); `X-Cf-Profile` is stripped and discarded, never read.
@@ -143,6 +171,10 @@ Runs as root, unlike every other service in this stack. That's deliberate here, 
 **Which credential an addon attaches is deployment config, never request data** — see `PLAYBOOK.md`'s generation constraints for the rule. `030_cloudflare.py` shipped the counter-example until 1.6.0: `X-Cf-Profile` selected the profile, so a `dev`/`qa`/`prod-ir` ladder was decorative and the audit line recorded the escalated profile as authorised. `CLOUDFLARE_PROFILE` on the proxy service replaces it, the broker rejects any other profile as defense-in-depth, and `header_selector` in `scripts/lib/invariants.sh` catches the next addon that reaches for the same shortcut. Stripping a client header is not reading it — a bare `pop()`/`del` is correct and does not trip the check.
 
 **A wildcard host pattern is safe for credential injection only when the entire suffix is single-tenant** — see `PLAYBOOK.md`'s generation constraints for the rule. The allowlist and an injection addon both match hosts but carry different blast radius: a too-wide allowlist entry means the agent can *reach* something it should not, a too-wide injection match means a live token is *handed* to whoever owns the name. `*.googleapis.com` is fine because Google holds every name beneath it; `*.workers.dev` is not, because anyone can register one. `injection_wildcard_multitenant` fails on a known list in `scripts/lib/invariants.sh` and `injection_wildcard` notes on every other wildcard — deliberately a note, since #41 ships a legitimate one and the list will never be complete. Both are scoped to addons that actually attach a credential header, so `001_allowlist.py` is not told off for the entries it exists to hold.
+
+**The base addons are baked into the proxy image, and the deployment-checking scripts invert around `v1.10.0`.** Below it, an unvendored `000_policy.py` is a missing control and `check-drift.sh` hard-fails; at or above it the image carries it and a vendored copy is a note — dead weight the entrypoint ignores. `check-drift.sh` derives which from the deployment's pin, and treats a non-tag pin as "below" because that direction fails closed. `check-invariants.sh` deliberately reads no pin (it is a property-of-the-file-in-front-of-you scanner), so it downgraded existence to a note and keeps ordering as a failure.
+
+**Hostname comparisons in an addon must be normalised.** `000_policy.py` compared a raw host against a lowercase set until 1.9.2, so `http://BROKER:8080/github/token` through the proxy returned 200 with the broker's body — DNS is case-insensitive, and a trailing root dot did the same. Use `hostmatch.normalize()`, or a local mirror of it in a file deployments vendor at pins predating `hostmatch.py` (1.7.0). `tests/integration/20` covers it.
 
 **`GH_TOKEN=proxy-injected` and `CLOUDFLARE_API_TOKEN=proxy-injected` are dummy values, never real ones** — see `PLAYBOOK.md`'s Known Providers / generation constraints for why.
 
