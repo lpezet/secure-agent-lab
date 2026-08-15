@@ -136,12 +136,34 @@ services:
   # the `secure` or `lab` network (no `networks:` key — that is deliberate, so
   # the audit trail cannot become a channel between them), and its published
   # port is loopback-only: viewable from the host, not from inside the stack.
+  #
+  # Behind a profile so it can be switched off as an operation rather than an
+  # edit. Deleting the block would make a deployment that merely turned a
+  # feature off look like one that diverged from this template, to
+  # check-drift.sh and to anything else comparing the two. COMPOSE_PROFILES in
+  # .env is the state; .env.example ships it enabled, and 00-config-lint fails
+  # if it ever does not.
+  #
+  # Only the viewer is optional. The three services that WRITE the trail, and
+  # log-rotator which bounds it, are unprofiled — turning this off costs you
+  # the dashboard, not the audit trail.
   observer:
+    profiles: ["observer"]
     build: https://github.com/lpezet/secure-agent-lab.git#v1.10.1:stack/observer
     volumes:
       - audit-logs:/var/log/audit:ro
     ports:
-      - "127.0.0.1:9000:9000"
+      # `${VAR-default}`, NOT `${VAR:-default}`: an *unset* variable takes 9000,
+      # an *empty* one stays empty and Docker assigns a free port. So a copied
+      # template behaves exactly as it always has, and two deployments on one
+      # machine stop colliding on the host port — set OBSERVER_PORT= and read
+      # the result back with `docker compose port observer 9000`.
+      #
+      # The 127.0.0.1 prefix is literal and comes first, so nothing set in .env
+      # can move this off loopback. That matters: the observer serves the audit
+      # trail over plain HTTP with no auth, and is safe only for being
+      # unreachable off the host.
+      - "127.0.0.1:${OBSERVER_PORT-9000}:9000"
     healthcheck:
       test:
         [

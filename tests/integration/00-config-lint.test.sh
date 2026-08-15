@@ -508,10 +508,61 @@ for conf in "${AUDIT_COMPOSES[@]}"; do
 done
 
 suite "observer's dashboard port is loopback-only"
+# The port NUMBER is a deployment's business — template/ parameterises it so two
+# stacks on one machine do not collide (#79). The interface is not: observer
+# serves the audit trail over plain HTTP with no auth and is safe only for being
+# unreachable off the host. So assert the 127.0.0.1 prefix, which no value of
+# OBSERVER_PORT can move, rather than the exact mapping.
 for conf in "${AUDIT_COMPOSES[@]}"; do
   obs_block=$(awk '/^  observer:/{f=1;next} f&&/^  [a-zA-Z-]+:/{exit} f' "$conf")
-  check_contains "$conf — observer port bound to 127.0.0.1" "$obs_block" '"127.0.0.1:9000:9000"'
+  pub=$(printf '%s\n' "$obs_block" | grep -E '^[[:space:]]*-[[:space:]]*"?[^"#]*:9000"?[[:space:]]*$' | head -1)
+  if [ -z "$pub" ]; then
+    ko "$conf — observer publishes no port to 9000" "expected a ports: entry ending :9000"
+  else
+    case "$(printf '%s' "$pub" | sed 's/^[[:space:]]*-[[:space:]]*"\?//')" in
+      127.0.0.1:*) ok "$conf — observer port bound to 127.0.0.1" ;;
+      *) ko "$conf — observer port is not bound to loopback" "$pub" ;;
+    esac
+  fi
 done
+
+suite "a profile the template declares is a profile .env.example enables"
+# Compose reads an ABSENT COMPOSE_PROFILES as "no profiles enabled", so a
+# profiled service whose profile nothing turns on is simply not there — and
+# nothing says so at startup. That is an acceptable trade for the observer,
+# whose loss costs the dashboard rather than the trail, and it is only
+# acceptable while the default actually enables it. Make that a build failure
+# rather than something to remember (#80).
+TPL_COMPOSE="template/compose.yaml"
+TPL_ENV="template/.env.example"
+if [ ! -f "$TPL_COMPOSE" ] || [ ! -f "$TPL_ENV" ]; then
+  skip "no template to check" ""
+elif ! python3 -c 'import yaml' 2>/dev/null; then
+  skip "PyYAML unavailable — cannot read declared profiles" ""
+else
+  declared=$(python3 - <<'PYEOF'
+import yaml
+d = yaml.safe_load(open("template/compose.yaml")) or {}
+out = set()
+for svc in (d.get("services") or {}).values():
+    out.update(svc.get("profiles") or [])
+print("\n".join(sorted(out)))
+PYEOF
+)
+  enabled=$(sed -n 's/^COMPOSE_PROFILES=//p' "$TPL_ENV" | head -1 | tr ',' '\n' | sed 's/^ *//; s/ *$//')
+  if [ -z "$declared" ]; then
+    ok "$TPL_COMPOSE declares no profiles — nothing to enable"
+  else
+    for prof in $declared; do
+      if printf '%s\n' "$enabled" | grep -qx "$prof"; then
+        ok "$TPL_ENV enables the '$prof' profile"
+      else
+        ko "$TPL_ENV does not enable the '$prof' profile" \
+           "template/compose.yaml declares it, so shipping without it turns the service off silently"
+      fi
+    done
+  fi
+fi
 
 suite "cred-gateway bakes an empty /var/log/audit"
 # Unlike AUDIT_LOG (opt-in, no-op if unset), nginx fails to start if a

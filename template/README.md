@@ -66,6 +66,50 @@ answers 404 on every credential route and cred-gateway denies everything but
 `proxy/` lands wholesale at `/addons`, so a data file placed there would be
 loaded as code.
 
+## Running more than one
+
+The observer publishes a host port, so two copies of this template on one
+machine would collide on 9000. Set it empty and Docker picks a free one:
+
+```bash
+printf 'OBSERVER_PORT=\n' >> .env
+docker compose up -d
+docker compose port observer 9000      # 127.0.0.1:64805
+```
+
+Leave it unset for the historical 9000. A number works too, but then something
+has to remember which deployment owns which port — that is state that can be
+wrong, and asking Docker makes the collision impossible instead of tracked.
+
+Either way the dashboard stays on `127.0.0.1`: that prefix is literal in
+`compose.yaml` and no value of `OBSERVER_PORT` can move it. The observer serves
+the audit trail over plain HTTP with no auth, and is safe only for being
+unreachable off the host.
+
+## Turning the dashboard off
+
+`observer` sits behind a compose profile, so switching it off is a value rather
+than an edit — a deployment that deleted the service block would look, to
+`check-drift.sh` and to anything else comparing it with this template, like one
+that had diverged:
+
+```bash
+COMPOSE_PROFILES=            # in .env — keep the line, empty it
+docker compose --profile observer rm --stop --force observer
+```
+
+and back on, without touching anything else or losing the trail it was serving:
+
+```bash
+docker compose --profile observer up -d observer
+```
+
+**Keep the `COMPOSE_PROFILES` line in `.env` even when empty.** Compose reads an
+absent one as "no profiles", so deleting it turns the dashboard off silently.
+Only the viewer is optional: the three services that *write* the trail and
+`log-rotator` which bounds it are unprofiled, so this costs you the dashboard,
+never the audit trail.
+
 ## Keeping it current
 
 ```bash
