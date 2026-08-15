@@ -4,14 +4,22 @@ Docker infrastructure for running autonomous agents (e.g. Claude Code) without e
 long-lived credentials to the agent's process. Outbound HTTPS is intercepted by mitmproxy,
 which injects credentials fetched from a broker the agent cannot reach directly.
 
+**The agent never holds a credential. It holds the ability to spend one.**
+
+[`CONCEPT.md`](CONCEPT.md) is the model — the threat it addresses, why the boundary is
+drawn where it is, and what it does **not** protect against. Read that first if you are
+deciding whether this fits your problem. This file is the tour.
+
 ## Repository structure
 
 ```
 stack/          Core reusable infrastructure (broker, proxy, cred-gateway, observer,
-                log-rotator, base lab image)
-examples/
-  dev-container/   VS Code dev container — open any repo in a secured workspace
-  claude-code/     Claude Code in a secured container — attach and use interactively
+                log-rotator, base lab image) — the images, and the only place a
+                mandatory control lives
+template/       The deployment template: the wiring, pinned by tag. Start here.
+bank/           Vetted credential providers, installed as data rather than written
+examples/       Two working deployments to read — see examples/README.md for how
+                they differ
 scripts/        check-drift.sh — does a deployment's bind-mounted files still
                 match the tag it is pinned at?
                 check-invariants.sh — are a deployment's own files safe on
@@ -59,41 +67,22 @@ this repo's GitHub URL, so you only need the example directory itself to get sta
         ~/.config/agent-creds/   (read-only bind mount)
 ```
 
-Two Docker networks enforce the boundary:
-
-- `secure` — broker, proxy, cred-gateway. The lab container is **not** on this network.
-- `lab` — lab, proxy, cred-gateway. **`internal: true`**, so it has no default
-  gateway: the only route out of the lab is the proxy. That is what makes the
-  egress allowlist enforcing rather than advisory — without it `HTTP_PROXY` is
-  a request the agent can decline with `curl --noproxy '*'`.
-
-  `secure` is deliberately *not* internal; the broker calls provider APIs
-  directly through it. Set `LAB_INTERNAL=false` to opt out — see PLAYBOOK.md.
-
-The broker is on `secure` only. Docker DNS will not resolve `broker` from the lab container,
-and there is no route even if it did. The only broker-adjacent surface reachable from lab is
-the two paths nginx explicitly whitelists in `cred-gateway`.
+Two Docker networks enforce the boundary: `secure` (broker, proxy, cred-gateway) and
+`lab` (lab, proxy, cred-gateway), with the lab container never on `secure` and the `lab`
+network `internal: true` so the proxy is the only route out. Why each of those matters,
+and what breaks without it, is in [`CONCEPT.md`](CONCEPT.md#the-approach).
 
 ### Why cred-gateway exists
 
-Git authenticates to `github.com` via HTTP Basic auth inside the HTTPS tunnel — a different
-flow from API calls. The proxy addon (`010_github.py`) deliberately does **not** match
-`github.com`: injecting a token there would conflict with git's Basic auth handshake inside
-the MITMed connection. So git credentials cannot go through the proxy injection path.
+Git authenticates to `github.com` with HTTP Basic auth *inside* the TLS tunnel, which
+collides with token injection — so `010_github.py` deliberately does not match
+`github.com`, and git needs a credential locally instead. cred-gateway is the narrow
+bridge that hands one over: nginx on both networks, denying everything by default,
+exposing only the paths a deployment whitelists.
 
-Instead, git is configured with a credential helper: `curl http://cred-gateway/github/credential`.
-This is a direct HTTP call from the lab container (not proxied) that returns the token in
-git's `username=x-access-token\npassword=<token>` format.
-
-cred-gateway (nginx) sits on both networks and acts as the narrow bridge. It denies everything
-by default; whitelisted endpoints come from `*.conf` snippets bind-mounted at
-`/etc/nginx/gateway.d` (see `examples/*/cred-gateway/github.conf`), which expose only
-`/github/credential` and `/github/identity`, proxying those through to the broker on `secure`.
-Raw credential endpoints (`/anthropic/cred`, `/github/token`) have no snippet and return 403 —
-exposing them would let the lab container exfiltrate real secrets directly.
-
-In short: the **proxy** handles API traffic via token injection; **cred-gateway** handles git's
-credential helper via a tightly scoped nginx whitelist.
+The proxy handles API traffic by injection; cred-gateway handles git's credential helper
+through a tightly scoped whitelist. Which routes may be exposed and which may not is a
+single rule, stated in [`CONCEPT.md`](CONCEPT.md#why-cred-gateway-exists).
 
 ### Audit logging
 
@@ -131,80 +120,46 @@ That comes up with no credentials and the boundary intact; add one by copying a
 
 ### Or start from an example
 
-Each is self-contained and smaller than the template. See its README for prerequisites,
-credential setup, and security boundary tests.
-
-### VS Code dev container
-
-Opens your repo in a credential-free workspace. Claude Code, `gh`, `wrangler`, and `git` all
-work transparently — real credentials are injected at the network level.
-
-```bash
-cd examples/dev-container/.devcontainer
-cp .env.example .env   # fill in GITHUB_APP_ID and GITHUB_APP_INSTALLATION_ID
-```
-
-Open `examples/dev-container/` in VS Code → **Dev Containers: Reopen in Container**.
-
-See [`examples/dev-container/README.md`](examples/dev-container/README.md) for full setup.
-
-### Claude Code in a secured container
-
-Runs Claude Code inside the secure proxy stack with no credentials in the container.
-
-```bash
-cd examples/claude-code
-cp .env.example .env   # fill in GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, ANTHROPIC_API_KEY
-docker compose up --build -d
-docker compose logs -f lab   # watch setup complete
-```
-
-See [`examples/claude-code/README.md`](examples/claude-code/README.md) for full setup.
+Two working deployments, pinned and meant to be read — [`examples/README.md`](examples/README.md)
+says how they differ and which axis is which. In short: `claude-code` is the smaller shape
+(4 services, no audit trail) and `dev-container` is the fuller one delivered as a VS Code
+devcontainer. Each has its own README with prerequisites, credential setup, and the security
+checks to run against it.
 
 ## Extending the stack
 
 ### Adding a credential provider
 
-Each example is one directory per service, holding exactly the files that service loads:
+Two ways, and the first is usually right:
+
+**Install one from [`bank/`](bank/README.md).** Vetted, versioned, and installable as data —
+one directory per service, copied into the matching directory of your deployment. No code to
+write and nothing to get subtly wrong.
+
+**Write one.** [`PLAYBOOK.md`](PLAYBOOK.md) has the whole procedure — which file goes where,
+restart order, and the generation-time constraints that exist because each one has been
+violated at least once here. Every deployment is one directory per service, holding exactly
+the files that service loads:
 
 ```
-examples/claude-code/
-  broker/        *.js    → /app/providers
-  proxy/         *.py    → /addons
-  cred-gateway/  *.conf  → /etc/nginx/gateway.d
-  lab/           Dockerfile + setup scripts
-  compose.yaml
+broker/        *.js    → /app/providers
+proxy/         *.py    → /addons
+cred-gateway/  *.conf  → /etc/nginx/gateway.d
 ```
 
-1. Drop a provider file in `broker/` following the existing pattern.
-   Restart the broker to pick it up — no image rebuild needed.
-2. Add a numbered addon in `proxy/` following `020_anthropic.py` or
-   `030_cloudflare.py`. Restart the proxy — `entrypoint.sh` auto-discovers `*.py` files at
-   startup.
-3. Only if a lab-side tool must hold the credential locally, add a `cred-gateway/` snippet
-   exposing it. If the credential is only ever spent on an outbound API call, skip this
-   — that is the difference between the agent never seeing a secret and it holding one.
-4. Add a smoke-test assertion verifying injection works and the broker endpoint is unreachable
-   from the lab container, plus coverage in `tests/` — at minimum a spoofed-`Host` case.
+The one decision worth making deliberately is whether a `cred-gateway/` snippet is needed at
+all. If the credential is only ever spent on an outbound API call, it is not — that is the
+difference between the agent never seeing a secret and it holding one. See
+[`CONCEPT.md`](CONCEPT.md#why-cred-gateway-exists) for the rule.
 
 ### Proxy allowlist
 
-The proxy can restrict outbound destinations to an explicit allowlist. It is **off by default**:
-with no allowlist file mounted, every destination is permitted and the proxy logs a warning at
-startup. Turning it on takes two pieces — the addon that enforces it, and the file that lists
-what to permit:
+The proxy can restrict outbound destinations to an explicit list. It is **off by default**:
+with no allowlist file mounted every destination is permitted and the proxy warns at startup,
+so a half-enabled allowlist fails open rather than silently blocking.
 
-```bash
-cd examples/claude-code
-
-# 1. The addon. Examples do not ship it, since egress control is opt-in.
-cp ../../stack/proxy/addons/001_allowlist.py proxy/
-
-# 2. The list itself — a plain text file of domains, not Python.
-cp ../../stack/proxy/allowlist.sample allowlist
-```
-
-Then uncomment the allowlist volume in that example's `compose.yaml`:
+Turning it on is one file, not two. Since `v1.10.0` the addon is in the proxy image — there
+is nothing to copy — so all a deployment supplies is the data:
 
 ```yaml
   proxy:
@@ -212,54 +167,28 @@ Then uncomment the allowlist volume in that example's `compose.yaml`:
       - ./allowlist:/etc/agent-allowlist:ro
 ```
 
-The list sits next to `compose.yaml` rather than inside `proxy/`, because `proxy/` is mounted
-wholesale as `/addons` — a non-addon file placed there would be mounted into `/addons` as well.
+[`template/allowlist`](template/allowlist) ships this mount already wired, with the file
+present and empty of entries. The list must sit **outside** `proxy/`, because that directory
+is mounted wholesale as `/addons` — a data file placed there would be loaded as an addon.
 
-Edit `allowlist` to define allowed hostnames.
+One entry per line, `domain [METHODS]`, methods defaulting to `GET,HEAD,OPTIONS`. Matching is
+on label boundaries, so `*.example.com` covers `a.b.example.com` but never the `example.com`
+apex and never `evilexample.com`. [`PLAYBOOK.md`](PLAYBOOK.md) has the full format and the
+edge cases; restart the proxy after editing:
 
-Each line has the form:
-
-```
-domain [METHODS]
-```
-
-`domain` is an exact hostname or a wildcard (`*.example.com` matches all subdomains).
-`METHODS` is an optional comma-separated list of HTTP methods to permit for that domain.
-Omitting `METHODS` defaults to `GET,HEAD,OPTIONS` (safe reads only).
-Use `*` to explicitly allow all methods.
-
-```
-# Default: GET, HEAD, OPTIONS only
-storage.googleapis.com
-
-# Explicit method list
-api.example.com           GET,POST
-
-# Opt in to all methods
-uploads.example.com       *
-
-# Wildcard subdomain restricted to writes
-*.internal.example.com    PUT,POST,PATCH,DELETE
-```
-
-`CONNECT` is always permitted for allowlisted domains — it is required to establish HTTPS
-tunnels. The actual HTTP method is enforced on the inner request inside the tunnel.
-
-Trailing comments are stripped, so `api.example.com  # read only` behaves as `api.example.com`.
-Before 1.0.0 that comment was parsed as the method list and blocked the domain outright.
-
-After editing the allowlist file, restart the proxy to pick up changes:
 ```bash
 docker compose up -d --force-recreate proxy
 ```
 
 ## Security notes
 
+The threat model, and what this does **not** protect against, are in
+[`CONCEPT.md`](CONCEPT.md#what-this-does-not-protect-against). What follows is specific to
+the pieces above.
+
 - `GH_TOKEN=proxy-injected` and `ANTHROPIC_API_KEY=proxy-injected` are deliberate dummy
   values. They satisfy client-side "am I authenticated?" checks without holding real secrets.
   The proxy strips them at the wire and injects the real credentials.
-- `000_policy.py` blocks any proxied request targeting `broker` or `cred-gateway` hostnames
-  as defense-in-depth on top of Docker network isolation.
 - `020_anthropic.py` blocks `/v1/organizations/*` (Anthropic Admin API) — the agent can use
   the API but cannot enumerate or manage org resources.
 - The broker never routes through the proxy. It makes direct HTTPS calls to `api.github.com`

@@ -23,7 +23,10 @@ That bar is what makes an entry *data*. If installing GitHub requires separately
 knowing to set `credential.useHttpPath false`, the knowledge lives in a human or
 in an installer, and adding a provider needs per-provider code somewhere.
 
-**The bar is about providers, not about the whole stack.** A bank entry adds a
+**The bar is about providers, not about the whole stack.** Which artefact answers
+which question is stated once, in
+[`CONCEPT.md`](../CONCEPT.md#which-document-is-authoritative); this entry is
+the *providers* row of that table. A bank entry adds a
 credential the lab can spend; it is not where the boundary comes from. The
 controls that are not anyone's choice — the internal-host block and the egress
 allowlist — live in the **images**, from `v1.10.0` on: `000_policy.py` and
