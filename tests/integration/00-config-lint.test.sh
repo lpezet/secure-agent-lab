@@ -24,7 +24,7 @@ require_jq   # manifests are JSON and are read, not pattern-matched
 suite "cred-gateway snippets use exact-match locations"
 # A prefix match like `location /github/` exposes every broker route under it,
 # including /github/token. tests/integration/10 proves that leak is real.
-for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf template/provider/*/cred-gateway/*.conf; do
   [ -f "$f" ] || continue
   if bad=$(inv_location_prefix "$f"); then ok "$f — all locations exact-match"
   else ko "$f — non-exact location" "$bad"; fi
@@ -33,7 +33,7 @@ done
 suite "snippets do not expose raw-credential endpoints"
 # These hand the lab container a usable secret rather than spending it on
 # lab's behalf. They belong in a proxy addon, never in the gateway.
-for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf; do
+for f in "${SNIPPETS[@]}" bank/*/cred-gateway/*.conf template/provider/*/cred-gateway/*.conf; do
   [ -f "$f" ] || continue
   if bad=$(inv_raw_cred_endpoint "$f"); then ok "$f — exposes no raw-credential route"
   else ko "$f — exposes a raw-credential route" "$bad"; fi
@@ -148,7 +148,8 @@ suite "audit events reference an exception only via .code or .name"
 for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
          examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
          examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/broker/*.js bank/*/proxy/*.py; do
+         bank/*/broker/*.js bank/*/proxy/*.py \
+         template/provider/*/broker/*.js template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_exception_quoted "$f"); then ok "$(basename "$f") — exception referenced safely or not at all"
   else ko "$f — audit event quotes an exception" "$bad"; fi
@@ -183,7 +184,7 @@ suite "only the policy addon references pretty_host in code"
 # Comments and docstrings are stripped first — every shipped addon explains
 # this anti-pattern in its own prose, which is the point.
 for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/proxy/*.py; do
+         bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   [ "$(basename "$f")" = "000_policy.py" ] && continue
   if bad=$(inv_pretty_host "$f"); then ok "$(basename "$f") — decides on flow.request.host"
@@ -201,7 +202,7 @@ suite "addons take no direction from a client-supplied request header"
 # Stripping is not reading: a bare pop() or del is how a client header is
 # correctly dropped, and does not trip this.
 for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/proxy/*.py; do
+         bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_header_selector "$f"); then ok "$(basename "$f") — reads no client header into a variable"
   else ko "$f — binds a client-supplied header to a name it acts on" "$bad"; fi
@@ -218,7 +219,7 @@ suite "no addon injects a credential for a multi-tenant wildcard suffix"
 # half fails. Every shipped addon matches exact hosts today, so both halves
 # should be silent; the planted cases live in 06-check-invariants.
 for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/proxy/*.py; do
+         bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_injection_wildcard_multitenant "$f"); then
     ok "$(basename "$f") — injects for no multi-tenant wildcard"
@@ -235,7 +236,7 @@ suite "addons log a parsed endpoint, never a raw request path"
 # Backticked mentions are prose (the addons explain the anti-pattern in their
 # own docstrings), so only real keyword arguments count.
 for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/proxy/*.py; do
+         bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_raw_path_logged "$f"); then ok "$(basename "$f") — no raw path in an audit event"
   else ko "$f — logs a raw request path" "$bad"; fi
@@ -253,8 +254,12 @@ done
 # paragraph warning that the path includes the query string. A deployment
 # following it built the leak the release was written to prevent. Prose
 # mentions are backticked; code blocks are not.
+# bank/ and the skeleton are in scope for the same reason PLAYBOOK.md is: this
+# check exists because a RECOMMENDED snippet carried the bug, and those are the
+# other two places a recommended snippet lives. template/provider/ especially —
+# it is the file whose entire purpose is to be copied.
 for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
-         stack/proxy/addons/*.py; do
+         stack/proxy/addons/*.py bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_raw_path_split "$f"); then ok "$(basename "$f") — no \"/\" split off a raw path"
   else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
@@ -673,7 +678,13 @@ done
 # ---------------------------------------------------------------------------
 suite "bank manifests are well-formed"
 BANK_SCHEMA="bank/schema/provider.schema.json"
-bank_entries=(bank/*/)
+# Skeletons are checked as entries too. A scaffold that fails this repo's own
+# checks teaches the mistake PLAYBOOK.md exists to prevent, and it is the one
+# file whose whole purpose is to be copied. What they are NOT checked for is
+# being INSTALLABLE: the hosts are .invalid, no credential exists behind them,
+# and the deny-list suite below deliberately still reads bank/ alone, because a
+# placeholder route is not a route a deployment can be scanned for.
+bank_entries=(bank/*/ template/provider/*/)
 if [ ! -f "$BANK_SCHEMA" ]; then
   ko "bank schema present" "$BANK_SCHEMA missing"
 elif ! jq -e . "$BANK_SCHEMA" >/dev/null 2>&1; then
@@ -717,7 +728,16 @@ else
     fi
 
     mname=$(jq -r '.name // ""' "$man")
-    check "$man — .name matches directory name" "$mname" "$base"
+    case "$entry" in
+      template/provider/*)
+        # The directory names the shape — static-key, and one day oauth-refresh
+        # — while .name is the placeholder an author renames. The pattern check
+        # below still applies: a skeleton whose name a schema would reject
+        # teaches a name nobody can use.
+        ok "$man — .name is a placeholder, not the shape directory ($mname)"
+        ;;
+      *) check "$man — .name matches directory name" "$mname" "$base" ;;
+    esac
     if printf '%s' "$mname" | grep -qE "$name_pat"; then ok "$man — .name matches schema pattern"
     else ko "$man — .name violates schema pattern" "$mname !~ $name_pat"; fi
 
@@ -737,9 +757,12 @@ else
     # Files the manifest implies must exist, and no file may ride along that
     # the manifest never mentions. Both directions: a missing addon breaks the
     # install, a stray file is something nobody reviewed.
-    implied="provider.json broker/$base.js proxy/$base.py"
+    # Named after the entry's .name rather than its directory: for a bank entry
+    # those are the same string, and for a skeleton the files carry the
+    # placeholder the author is about to rename.
+    implied="provider.json broker/$mname.js proxy/$mname.py"
     jq -e '.broker_routes[] | select(.exposed)' "$man" >/dev/null 2>&1 \
-      && implied="$implied cred-gateway/$base.conf"
+      && implied="$implied cred-gateway/$mname.conf"
     ls=$(jq -r '.lab_setup // ""' "$man"); [ -n "$ls" ] && implied="$implied $ls"
 
     for rel in $implied; do
@@ -772,9 +795,9 @@ fi
 # pretty_host suite — every addon names hostnames in its own prose.
 # ---------------------------------------------------------------------------
 suite "bank addons match their declared hosts"
-for m in bank/*/provider.json; do
+for m in bank/*/provider.json template/provider/*/provider.json; do
   [ -f "$m" ] || continue
-  nm=$(jq -r .name "$m"); addon="bank/$nm/proxy/$nm.py"
+  nm=$(jq -r .name "$m"); addon="$(dirname "$m")/proxy/$nm.py"
   [ -f "$addon" ] || continue
   declared=$(jq -r '.hosts[]' "$m" | sort -u)
   actual=$(awk '
