@@ -38,6 +38,14 @@ trap 'rm -rf "$WORK"; cleanup' EXIT
 # App private key. Generated per run; octokit signs the JWT with it and the stub
 # never verifies the signature, but auth-app refuses to run without a real one.
 openssl genrsa -out "$WORK/app.pem" 2048 >/dev/null 2>&1
+# openssl writes it 0600, owned by whoever runs the suite. The broker image
+# drops to `node` (uid 1000), and a bind-mounted file keeps its host uid inside
+# the container, so the broker can only read this when the host user happens to
+# BE uid 1000. That is true on a typical workstation and false on a GitHub
+# runner (uid 1001), where every assertion below failed with EACCES while the
+# suite passed locally. Widen it: this key is generated per run, is never a
+# credential for anything, and lives in a directory removed on exit.
+chmod 0644 "$WORK/app.pem"
 # Self-signed leaf for the stub. CN is irrelevant — verification is off.
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
   -subj "/CN=api.github.com" -keyout "$WORK/stub.key" -out "$WORK/stub.crt" \
