@@ -260,12 +260,44 @@ for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
   else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
 done
 
-suite "policy addon loads before provider addons"
-# 000_policy.py must run first; entrypoint.sh globs alphabetically.
-for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do
+suite "the base addons are vendored only where the pin cannot supply them"
+# They moved into the proxy image in 1.10.0 (#62). So which shape is correct
+# depends on the pin, exactly as it does in check-drift.sh:
+#
+#   below 1.10.0 — vendored, and 000_policy.py must sort first, because
+#                  entrypoint.sh globs the mount alphabetically
+#   at or above  — absent, because the image loads them ahead of the mount and
+#                  a vendored copy is dead weight the entrypoint warns about
+#
+# stack/proxy/addons/ is the source of both files rather than a deployment, so
+# it is checked for ordering unconditionally.
+BAKED_MIN="1.10.0"
+if bad=$(inv_policy_addon_first stack/proxy/addons); then
+  ok "stack/proxy/addons — first addon is 000_policy.py"
+else ko "stack/proxy/addons — policy addon does not load first" "$bad"; fi
+
+for d in examples/*/proxy examples/*/.devcontainer/proxy; do
   [ -d "$d" ] || continue
-  if bad=$(inv_policy_addon_first "$d"); then ok "$d — first addon is 000_policy.py"
-  else ko "$d — policy addon does not load first" "$bad"; fi
+  c="$(dirname "$d")/compose.yaml"
+  [ -f "$c" ] || { skip "$d — no compose.yaml beside it" ""; continue; }
+  tag=$(grep -oE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$c" | head -1 | sed 's/.*#v//')
+  if [ -z "$tag" ]; then skip "$d — no pinned tag found" ""; continue; fi
+
+  if [ "$(printf '%s\n%s\n' "$BAKED_MIN" "$tag" | sort -V | head -1)" = "$BAKED_MIN" ]; then
+    # At or above: the image supplies them, so vendoring is the finding.
+    for base in 000_policy.py 001_allowlist.py; do
+      if [ -f "$d/$base" ]; then
+        ko "$d (pinned v$tag) still vendors $base" \
+           "the image ships it from v$BAKED_MIN — the proxy ignores this copy"
+      else
+        ok "$d (pinned v$tag) leaves $base to the image"
+      fi
+    done
+  else
+    if bad=$(inv_policy_addon_first "$d"); then
+      ok "$d (pinned v$tag, below v$BAKED_MIN) vendors it and loads it first"
+    else ko "$d — policy addon does not load first" "$bad"; fi
+  fi
 done
 
 suite "the template is pinned, self-consistent and not stale"

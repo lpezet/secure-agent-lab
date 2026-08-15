@@ -18,6 +18,11 @@ mkdep() {
   local d="$TMPD/$1"
   mkdir -p "$d"/{proxy,broker,cred-gateway}
   cp "$SRC"/proxy/*.py "$d/proxy/"
+  # From stack/, not from the example: the examples stopped vendoring this at
+  # v1.10.0 (#62/#64). A deployment that vendors it is still a supported shape
+  # — anything pinned below that release, and anything that has not tidied up
+  # after repinning — and it is the shape these suites are about.
+  cp "$REPO_ROOT"/stack/proxy/addons/000_policy.py "$d/proxy/"
   cp "$SRC"/broker/*.js "$d/broker/"
   cp "$SRC"/cred-gateway/*.conf "$d/cred-gateway/"
   cp "$SRC"/compose.yaml "$d/compose.yaml"
