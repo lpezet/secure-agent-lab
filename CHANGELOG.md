@@ -8,6 +8,61 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.9.1 — 2026-08-15
+
+No boundary change. The suite that guards the boundary now runs on every pull
+request — and its first run found a bug in the suite itself.
+
+### Added
+
+**The integration tier runs in CI.** There was no `.github/` in this repo at
+all: every assertion in `tests/` ran only when somebody remembered to run it
+locally. That is an odd gap for a project whose subject is a security boundary,
+and which already ships the suite that would catch a regression in it. The
+invariants in `scripts/lib/invariants.sh` exist because the same class of
+provider bug shipped twice; un-gated, the third would have merged the same way.
+
+Two jobs, on `pull_request`, on `push` to `main`, and on `workflow_dispatch`:
+`lint` runs the docker-free band (`00 05 06 07 08`) so "the invariants failed"
+reads as its own result in about twenty seconds, and `integration` runs the tier
+command verbatim rather than a list of the docker suites — a hardcoded list
+would silently stop covering whatever suite is added next, which is the one
+failure mode a test gate must not have.
+
+**The e2e tier is deliberately absent, and must stay absent from anything
+`pull_request` can trigger.** This is a public repo, so a fork PR that edits a
+test file runs attacker-authored code in the job, and the e2e job is the one
+that would hold the dedicated App's private key. It gets its own workflow on
+`workflow_dispatch` + `schedule`, with the credential handling designed rather
+than inherited. `permissions: contents: read` on the workflow is what keeps the
+PR gate credential-free by construction rather than by everyone remembering.
+
+Raised by the authors of
+[`secure-agent-lab-cli`](https://github.com/lpezet/secure-agent-lab-cli),
+reviewing this repo as a consumer building on it (#61).
+
+### Fixed
+
+**`45-broker-github-scope` could only pass as uid 1000.** `openssl genrsa -out`
+writes the App key at 0600, owned by whoever runs the suite. The broker image
+drops to `node` (uid 1000), and a bind-mounted file keeps its host uid inside
+the container — so the broker could read that key only when the host user
+happened to *be* uid 1000. True on a typical workstation, false on a GitHub
+runner (uid 1001), where every assertion in the suite failed with `EACCES`.
+
+Latent since the suite was written, and not findable locally. It also surfaces
+badly — `{"error":"internal error"}` and an `"error":"EACCES"` audit line, naming
+neither the file nor permissions — so the quirk is now written down in
+`tests/README.md` beside the WSL `credsStore` one.
+
+### Upgrading
+
+Nothing to do. No image, no addon, no manifest and no configuration changed;
+this release is a workflow, a test fix and documentation. A deployment pinned at
+`v1.9.0` is byte-for-byte unaffected by moving to `v1.9.1`.
+
+---
+
 ## 1.9.0 — 2026-08-11
 
 One field, so that something outside this repo can install from the bank
