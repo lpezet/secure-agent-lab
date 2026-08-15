@@ -8,6 +8,75 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.11.0 — 2026-08-15
+
+A second kind of template, and the directory move that makes room for it. No
+boundary change.
+
+### Changed
+
+**`template/` is now `template/deployment/`.** The first version assumed there
+would only ever be one kind of template. There are two, so the level had to
+exist; paying for it now was cheaper than it will ever be again. A deployment
+that fetched `template/` at `v1.10.0`–`v1.10.2` finds it moved.
+
+### Added
+
+**`template/provider/<shape>/` — skeletons for writing a bank entry**, when the
+bank does not carry the credential you need. The first shape is
+`static-key/`: a long-lived secret read from a file, attached to requests
+leaving the lab, never held by the lab.
+
+It exists because the skeleton describes **this repo's image API** — mitmproxy's
+`request(flow)` signature, `require("../audit")`, `import audit` resolving off
+`PYTHONPATH`, nginx `location` syntax — and that description was living in a
+downstream tool. Same shape as the deployment gap 1.10.0 closed, one level
+down: an API change needed a release of a different repo, and nothing over
+there could tell when its copy had gone stale. Reported and drafted from the
+[`sal`](https://github.com/lpezet/secure-agent-lab-cli) side (#78).
+
+Three decisions in it worth knowing:
+
+**Nothing is exposed, and there is no `cred-gateway/` snippet.** A static key is
+a reusable secret, and `CONCEPT.md`'s rule keeps those unexposed. A skeleton
+shipping an exposed route would teach the one mistake that rule exists to
+prevent. The shape that needs a gateway snippet is a *different* shape and gets
+its own directory — which is what the `<shape>/` level is for.
+
+**Shapes are named by mechanism, not by complexity.** `static-key` sits beside a
+future `oauth-refresh` or `minted-token` as a sibling. A `basic`/`advanced` pair
+would read as one scale and stop being true the moment a second shape arrived
+that was not more advanced, only different.
+
+**The placeholder is `acme`, and it is the only thing to replace.** The word
+*provider* also appears in these files — as a fixed filename (`provider.json`),
+as a schema enum value (`"load_band": "provider"`), as the audit trail's field
+*name*, and as English — and none of those may move. An earlier draft used
+`provider` for the placeholder too; substituting it downstream corrupted all
+four, including renaming an audit field after the vendor, which changes the
+shape of the trail rather than its contents.
+
+**Skeletons are linted as entries.** The same invariant checks that run over
+`bank/*/` run over `template/provider/*/` — host agreement, `flow.request.host`
+rather than `pretty_host`, no client header selecting a credential, no raw path
+in an audit event. A scaffold that failed this repo's own checks would teach
+the mistake `PLAYBOOK.md` exists to prevent. What they are *not* checked for is
+being installable: the hosts are `.invalid` and no credential exists behind
+them.
+
+Two invariants had never covered `bank/` either and now cover both:
+`inv_raw_path_split` — which exists because `PLAYBOOK.md` shipped the bug it
+detects as a *recommended* snippet — and `inv_exception_quoted`. Both were
+already passing; the exemption was the finding.
+
+### Upgrading
+
+**If you fetch the deployment template by path, it moved**: `template/` →
+`template/deployment/`. Nothing inside it changed, and a deployment already
+running is unaffected — this is a path in this repo, not in yours.
+
+---
+
 ## 1.10.2 — 2026-08-15
 
 Two knobs on the deployment template, for running more than one stack on a
