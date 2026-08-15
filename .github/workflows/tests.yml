@@ -1,0 +1,66 @@
+name: tests
+
+# The integration tier, on every pull request. This is the gate.
+#
+# The e2e tier is deliberately absent and must stay absent from anything
+# `pull_request` can trigger. It runs against a dedicated GitHub App and
+# ~/.config/agent-creds-e2e, so on a public repo a PR-triggered job holding
+# those secrets is a credential-exfiltration primitive: a fork PR that edits a
+# test file runs attacker-authored code with the App's private key in the
+# environment. e2e gets its own workflow, on `workflow_dispatch` + `schedule`,
+# with the credential handling designed rather than inherited. Nothing here
+# reads a secret, and `permissions` below is what keeps that true by
+# construction rather than by everyone remembering.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only, explicitly. The default token permissions are repository-wide
+# settings that can be widened elsewhere; stating them here means this workflow
+# does not inherit that.
+permissions:
+  contents: read
+
+# A force-push supersedes the run it interrupted. Never cancel on main: those
+# runs are the record of what the merged state actually does.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # The docker-free band: static checks over committed config, the drift
+  # scanner, the shared invariant library, the host matcher and the credential
+  # principal scanner. ~30s, and it is where a widened `location`, a
+  # `pretty_host` match or a client-header credential selector gets caught.
+  #
+  # Split out from `integration` so that result is legible on its own — "the
+  # invariants failed" and "a container did not come up" are different kinds of
+  # news. The integration job below re-runs these five as part of the whole
+  # tier; the few seconds that costs buys the split.
+  #
+  # The suite list is the docker-free band as of today. A new docker-free suite
+  # belongs here too, but forgetting is benign: it still runs in `integration`.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash tests/run.sh integration 00 05 06 07 08
+
+  # The whole tier, including the docker suites: cred-gateway route exposure,
+  # the proxy policy/injection/allowlist boundaries, broker scope, mount
+  # isolation, observer and log-rotator. No credentials — every suite runs
+  # against stubs and fixtures.
+  #
+  # Runs the tier command verbatim rather than a list of the docker suites. A
+  # hardcoded list would silently stop covering whatever suite gets added next,
+  # which is the one failure mode a test gate must not have.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash tests/run.sh integration

@@ -30,6 +30,19 @@ something you ask for by name, not something the obvious command does to you.
 For the same reason `all` is fail-fast: if integration is red there is no point
 paying for e2e.
 
+## In CI
+
+`.github/workflows/tests.yml` runs the integration tier on every pull request
+and on every push to `main`, as two jobs: `lint` (the docker-free band —
+`00 05 06 07 08`) and `integration` (the whole tier).
+
+**e2e is not there, and must not be added to anything `pull_request` can
+trigger.** This is a public repo, so a fork PR that edits a test file runs
+attacker-authored code in the job — and that tier's job would be the one
+holding the dedicated App's private key. e2e belongs in its own workflow on
+`workflow_dispatch` + `schedule`. The workflow's `permissions: contents: read`
+is what keeps the PR gate credential-free by construction.
+
 ## Shared code
 
 `lib.sh` holds the assertions (`check`, `check_ne`, `check_contains`,
@@ -42,7 +55,22 @@ the same way.
 Every resource is named with the running PID and removed by an `EXIT` trap, so
 a run never collides with — or cleans up — a real stack you have running.
 
-## Known environment quirk
+## Known environment quirks
+
+### A generated file mounted into the broker needs to be world-readable
+
+The broker image drops to `node` (uid 1000), and a bind-mounted file keeps its
+*host* uid and mode inside the container. So a file the suite generates at 0600
+— `openssl genrsa -out` does exactly that — is readable by the broker only when
+the host user happens to be uid 1000 too. That is true on a typical
+workstation and false on a GitHub runner (uid 1001), where it surfaces as
+`{"error":"internal error"}` and an `"error":"EACCES"` audit line rather than
+as anything about permissions.
+
+`chmod 0644` whatever you generate and mount. Files written with `cat >` or
+`printf >` already are, under a normal umask.
+
+### Docker Desktop on WSL
 
 Docker Desktop on WSL writes `"credsStore": "desktop.exe"` into
 `~/.docker/config.json`. `docker build` invokes that helper even for public
