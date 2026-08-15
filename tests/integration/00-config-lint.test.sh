@@ -8,7 +8,10 @@ set -uo pipefail
 cd "$REPO_ROOT"
 
 SNIPPETS=(examples/claude-code/cred-gateway/*.conf examples/dev-container/.devcontainer/cred-gateway/*.conf)
-COMPOSES=(stack/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
+# template/compose.yaml is in here because it is a deployment shape, not a
+# document about one: whatever it says is what everybody copies, so it is held
+# to every invariant a real deployment is.
+COMPOSES=(stack/compose.yaml template/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml)
 
 BANK_SCHEMA="bank/schema/provider.schema.json"
 require_jq   # manifests are JSON and are read, not pattern-matched
@@ -265,6 +268,82 @@ for d in examples/*/proxy examples/*/.devcontainer/proxy stack/proxy/addons; do
   else ko "$d — policy addon does not load first" "$bad"; fi
 done
 
+suite "the template is pinned, self-consistent and not stale"
+# The template is fetched by tag the way bank/<name>/ is, so the tag inside it
+# has to be the tag it ships at. Three ways that goes wrong: a branch ref, a
+# mix of refs across services, and — the #64 failure mode one level up — a
+# pin that simply stopped being updated.
+TPL="template/compose.yaml"
+if [ ! -f "$TPL" ]; then
+  skip "no template/compose.yaml" ""
+else
+  tpl_refs=$(grep -ohE 'secure-agent-lab\.git#[^:]+' "$TPL" | sed 's/.*#//' | sort -u)
+  tpl_count=$(printf '%s\n' "$tpl_refs" | grep -c . || true)
+  check "every service pins the same ref" "1" "$tpl_count"
+
+  tpl_tag=$(printf '%s\n' "$tpl_refs" | head -1)
+  case "$tpl_tag" in
+    v[0-9]*.[0-9]*.[0-9]*) ok "$TPL pins a release tag ($tpl_tag)" ;;
+    *) ko "$TPL pins '$tpl_tag', not a release tag" \
+          "a branch ref means a rebuild silently picks up whatever landed on it" ;;
+  esac
+
+  # Newest CHANGELOG entry is the floor. Equal is the steady state; above it is
+  # a release branch that has not written its entry yet. Below it means the
+  # template was left behind by a release, which is exactly what this catches.
+  newest=$(grep -oE '^## [0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md | head -1 | sed 's/^## //')
+  if [ -z "$newest" ]; then
+    skip "no version heading in CHANGELOG.md" ""
+  elif [ "$(printf '%s\n%s\n' "$newest" "${tpl_tag#v}" | sort -V | head -1)" = "$newest" ]; then
+    ok "$TPL ($tpl_tag) is not behind the newest release ($newest)"
+  else
+    ko "$TPL pins $tpl_tag, behind the newest release ($newest)" \
+       "the template is what everyone copies — repin it as part of the release"
+  fi
+
+  # The lab Dockerfile is copied from stack/lab rather than inherited (there is
+  # no published base image), so it is the one file here that can silently fall
+  # behind the tag the rest of the template names.
+  if diff -q <(grep -vE '^\s*#|^\s*$' template/lab/Dockerfile) \
+             <(grep -vE '^\s*#|^\s*$' stack/lab/Dockerfile) >/dev/null 2>&1; then
+    ok "template/lab/Dockerfile matches stack/lab, ignoring comments"
+  else
+    ko "template/lab/Dockerfile has drifted from stack/lab/Dockerfile" \
+       "$(diff -u stack/lab/Dockerfile template/lab/Dockerfile | head -20)"
+  fi
+fi
+
+suite "the template and the reference skeleton describe the same stack"
+# Two files on purpose: stack/compose.yaml mounts the repo layout
+# (./broker/providers) and the template mounts the deployment layout
+# (./broker), so they cannot be one file. What must not diverge is the shape —
+# which services exist, which networks each is on, which volumes there are.
+if [ ! -f "$TPL" ]; then
+  skip "no template/compose.yaml" ""
+elif ! python3 -c 'import yaml' 2>/dev/null; then
+  skip "PyYAML unavailable — cannot compare the two service graphs" ""
+else
+  graph_diff=$(python3 - <<'PYEOF'
+import yaml, sys
+def shape(path):
+    d = yaml.safe_load(open(path))
+    return {
+        "services": sorted(d.get("services", {})),
+        "networks": {n: sorted((s.get("networks") or []))
+                     for n, s in sorted(d.get("services", {}).items())},
+        "volumes": sorted(d.get("volumes") or {}),
+        "net_defs": sorted(d.get("networks") or {}),
+    }
+a, b = shape("stack/compose.yaml"), shape("template/compose.yaml")
+for k in a:
+    if a[k] != b[k]:
+        print(f"{k}: stack={a[k]!r} template={b[k]!r}")
+PYEOF
+)
+  if [ -z "$graph_diff" ]; then ok "same services, network membership and volumes"
+  else ko "the two graphs have diverged" "$graph_diff"; fi
+fi
+
 suite "examples build from a release tag, not a branch"
 # Tracking #main means a rebuild silently picks up whatever landed on main
 # since, while the bind-mounted addons stay frozen at whatever was copied —
@@ -318,7 +397,7 @@ suite "audit-logs volume is wired wherever observer/log-rotator are present"
 # whichever composes actually declare an observer service, rather than a
 # fixed list that goes stale as more examples upgrade.
 AUDIT_COMPOSES=()
-for c in stack/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml; do
+for c in stack/compose.yaml template/compose.yaml examples/claude-code/compose.yaml examples/dev-container/.devcontainer/compose.yaml; do
   grep -q '^  observer:' "$c" && AUDIT_COMPOSES+=("$c")
 done
 for conf in "${AUDIT_COMPOSES[@]}"; do
@@ -350,7 +429,7 @@ suite "the lab sets proxy env in both cases, because gRPC reads only lowercase"
 # not its gRPC ones. Measured in #48: zero flows reached the proxy with
 # uppercase alone. It also needs its own CA variable — it bundles its own roots
 # and reads none of the other three.
-for c in stack/compose.yaml examples/*/compose.yaml examples/*/.devcontainer/compose.yaml; do
+for c in stack/compose.yaml template/compose.yaml examples/*/compose.yaml examples/*/.devcontainer/compose.yaml; do
   [ -f "$c" ] || continue
   if bad=$(inv_proxy_env_case "$c"); then ok "$c — proxy env set in both cases"
   else ko "$c — gRPC would ignore the proxy" "$bad"; fi

@@ -13,9 +13,19 @@
 # and proxy already use: this file shows how the pieces connect, and you bring
 # the credentials you actually need.
 #
-# For a working stack, start from examples/claude-code or
-# examples/dev-container — both vendor a github.js provider and a github.conf
-# snippet you can copy and extend.
+# THIS IS NOT THE FILE TO COPY. It mounts the *repo* layout — ./broker/providers,
+# ./proxy/addons — because it sits beside the image sources. A deployment mounts
+# ./broker and ./proxy directly, which is why the template is a separate file
+# rather than this one with the build refs swapped.
+#
+# For a working stack, start from template/ — the deployment template, pinned to
+# a release tag and shipping the hardened shape. examples/claude-code and
+# examples/dev-container are smaller, and vendor a github.js provider and a
+# github.conf snippet you can read.
+#
+# 00-config-lint asserts this file and template/compose.yaml agree on which
+# services exist, which networks each is on, and which volumes there are — the
+# shape can't drift even though the mount paths differ.
 name: example-of-compose-file
 
 services:

@@ -55,6 +55,32 @@ lab            →      lab/Dockerfile                 lab/Dockerfile
 
 Which service owns a file is answered by the directory name, rather than by knowing that addons are a mitmproxy concept and providers a broker one. Keep new content under the service that consumes it.
 
+### template (`template/`)
+
+The deployment template — the wiring, pinned to a release tag and fetched the
+same way a `bank/` entry is: the service graph, both networks, the volumes, the
+mounts. It ships the **hardened** shape (audit trail on, `lab` internal,
+allowlist mounted) because it is what people copy, and a removed control is
+easier to notice than one that was never there.
+
+**Two compose files on purpose, and not a duplication to "fix".**
+`stack/compose.yaml` mounts the repo layout (`./broker/providers`,
+`./proxy/addons`) because it sits beside the image sources; a deployment mounts
+`./broker` and `./proxy` directly. They cannot be one file with the build refs
+swapped — the mount paths genuinely differ. What must not diverge is the
+*shape*, so `00-config-lint` compares the two on services, per-service network
+membership, and volumes, and fails if they disagree.
+
+`template/lab/Dockerfile` is copied from `stack/lab/` rather than inheriting a
+published base image, because there is no published base image — every service
+here builds from source. The lint diffs the two ignoring comments, since that
+copy is the one file in the template that can silently fall behind its own pin.
+
+The template's pin is checked three ways: every service names the same ref, the
+ref is a release tag rather than a branch, and it is not older than the newest
+`CHANGELOG.md` heading. That last one is the `examples/` staleness problem
+(#64) caught one level up — repin the template as part of cutting a release.
+
 ### broker (`stack/broker/`)
 
 Node.js HTTP server on `:8080`. Reads credentials from `/secrets` (bind-mounted from `~/.config/agent-creds/` on the host, read-only).

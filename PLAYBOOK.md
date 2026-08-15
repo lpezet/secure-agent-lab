@@ -243,6 +243,13 @@ Produce:
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
   `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
+
+  **Start from `template/compose.yaml` rather than writing this from
+  scratch.** It is the wiring — the service graph, both networks, the volumes,
+  the mounts — pinned to a release tag and fetched the same way a bank entry
+  is. What this section still describes is what you drop *into* it: which
+  provider files, in which directory, for the credentials you actually need.
+  Composing that set is the part a template cannot do for you.
 - **No `proxy/000_policy.py`.** From `v1.10.0` the proxy image carries it,
   along with `001_allowlist.py`, at `/opt/agent-proxy/addons/` — loaded ahead
   of whatever the deployment mounts at `/addons`. A control the deployment does
