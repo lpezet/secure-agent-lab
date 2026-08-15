@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
-  "name": "provider",
+  "name": "acme",
   "summary": "TODO: one line — which credential, for which hosts, and what the lab gets",
   "min_stack": "1.7.0",
   "load_band": "provider",
-  "hosts": ["api.provider.invalid"],
+  "hosts": ["api.acme.invalid"],
   "secrets": [
     {
-      "env": "PROVIDER_TOKEN_PATH",
-      "file": "provider.token",
+      "env": "ACME_TOKEN_PATH",
+      "file": "acme.token",
       "prompt": "TODO: what to paste, in the words the operator will recognise"
     }
   ],
   "broker_routes": [
-    { "path": "/provider/cred", "exposed": false }
+    { "path": "/acme/cred", "exposed": false }
   ]
 }

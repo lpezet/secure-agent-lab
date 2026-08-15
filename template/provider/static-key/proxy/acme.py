@@ -1,6 +1,6 @@
 """Inject a static key for one provider's hosts, and log what was called.
 
-TODO: rename every `provider` in this directory — including the filenames — to
+TODO: replace every `acme` in this directory — including the filenames — with
 your provider's name, then work through the TODOs. The installer assigns the
 NNN_ prefix when it lands in a deployment; do not add one here.
 
@@ -23,7 +23,7 @@ BROKER_URL = "http://broker:8080"
 # matched here means the credential is silently never injected, and a host
 # matched here but not declared there is an injection the egress allowlist was
 # never seeded for.
-HOSTS = ("api.provider.invalid",)
+HOSTS = ("api.acme.invalid",)
 
 _cache = TTLCache(maxsize=1, ttl=300)
 
@@ -31,7 +31,7 @@ _cache = TTLCache(maxsize=1, ttl=300)
 def _get_cred() -> str:
     """Return the credential from the broker, cached for five minutes."""
     if "cred" not in _cache:
-        r = requests.get(f"{BROKER_URL}/provider/cred", timeout=5)
+        r = requests.get(f"{BROKER_URL}/acme/cred", timeout=5)
         r.raise_for_status()
         _cache["cred"] = r.json()["value"]
     return _cache["cred"]
@@ -79,10 +79,10 @@ def request(flow: http.HTTPFlow) -> None:
     # TODO: attach it the way this provider expects.
     flow.request.headers["Authorization"] = f"Bearer {_get_cred()}"
 
-    ctx.log.info(f"provider: injected credential for {flow.request.method} {_endpoint(flow)}")
+    ctx.log.info(f"acme: injected credential for {flow.request.method} {_endpoint(flow)}")
     audit.log_event(
         "cred_injected",
-        provider="provider",
+        provider="acme",
         method=flow.request.method,
         endpoint=_endpoint(flow),
     )

@@ -1,5 +1,5 @@
-// TODO: rename every `provider` in this directory — including the filenames —
-// to your provider's name, then work through the TODOs.
+// TODO: replace every `acme` in this directory — including the filenames —
+// with your provider's name, then work through the TODOs.
 //
 // Broker side of the static-key shape: hold the long-lived secret, hand it to
 // the proxy, and never to the lab. Reachable only from the proxy on the
@@ -29,18 +29,18 @@ module.exports = {
   // The env var is the one provider.json declares under `secrets[].env`, and
   // its value is a path INSIDE the container. Never read a credential from
   // anywhere else — a path that came from a request is a path the lab chose.
-  "/provider/cred": async (url, send) => {
-    const token = tryReadFile(process.env.PROVIDER_TOKEN_PATH);
+  "/acme/cred": async (url, send) => {
+    const token = tryReadFile(process.env.ACME_TOKEN_PATH);
     if (!token) {
-      console.error("[broker] no credential file at PROVIDER_TOKEN_PATH");
-      logEvent("cred_unavailable", { provider: "provider" });
-      return send(500, { error: "no provider credential configured" });
+      console.error("[broker] no credential file at ACME_TOKEN_PATH");
+      logEvent("cred_unavailable", { provider: "acme" });
+      return send(500, { error: "no acme credential configured" });
     }
 
     // The event records the SHAPE of what happened. Never the value, and
     // never anything derived from it: observer serves this trail over HTTP.
-    console.log("[broker] issued provider credential to proxy");
-    logEvent("cred_issued", { provider: "provider", cred_type: "static_key" });
+    console.log("[broker] issued acme credential to proxy");
+    logEvent("cred_issued", { provider: "acme", cred_type: "static_key" });
     send(200, { type: "static_key", value: token });
   },
 };
