@@ -50,6 +50,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash tests/run.sh integration 00 05 06 07 08
 
+  # What compose makes of the shapes this repo ships — port interpolation and
+  # profile selection — without building an image. Seconds, so it sits beside
+  # `lint` rather than behind the slow job. Three releases shipped template
+  # changes before this existed, verified only by the reporter's own output.
+  stacks-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash tests/run.sh stacks 10
+
+  # The template and both examples, brought up from their own compose files
+  # with images built from the tag each one pins. Minutes, so it is its own job.
+  #
+  # This is the only thing anywhere that notices a repin landing badly: every
+  # other tier builds its containers by hand. It needs no credentials, which is
+  # what keeps it here rather than in a workflow holding secrets.
+  stacks-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash tests/run.sh stacks 20
+
   # The whole tier, including the docker suites: cred-gateway route exposure,
   # the proxy policy/injection/allowlist boundaries, broker scope, mount
   # isolation, observer and log-rotator. No credentials — every suite runs
