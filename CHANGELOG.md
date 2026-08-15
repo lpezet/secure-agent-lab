@@ -8,6 +8,60 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.11.1 — 2026-08-15
+
+The shapes this repo ships are now run, not only read. No boundary change.
+
+### Added
+
+**`tests/stacks/` — a third tier.** `00-config-lint` reads the files a
+deployment is made of; nothing ran them. Three releases in a row shipped
+changes whose runtime behaviour nothing here verified: the baked-addon
+entrypoint (1.10.0), `${OBSERVER_PORT-9000}` and `profiles: ["observer"]`
+(1.10.2), and the move to `template/deployment/` (1.11.0). The middle two were
+taken on a reporter's compose output rather than on anything in this repo.
+
+Two bands. `10-compose-config` builds nothing and runs in about a second — it
+asks compose what the files *mean*: that an unset `OBSERVER_PORT` publishes
+9000 and an empty one publishes nothing, that an absent `COMPOSE_PROFILES`
+drops the observer while the services writing the trail stay, and that a
+disabled profile is still declared. `20-boundary` brings the template and both
+examples up from their own compose files, with images compose builds **from the
+tag each one pins**, and checks the boundary from the `lab` network.
+
+That second band is the only thing anywhere that notices a repin landing badly
+— every other tier builds its containers by hand. Its assertions are the
+credential-free subset of the checks each example's README already documents,
+so it proves those READMEs true rather than inventing a second set. `lab` is
+never started: its image is a slow local build and its `setup.sh` fetches a
+GitHub App identity, so it is *supposed* to fail without credentials.
+
+Free, and needs no credentials, so both bands run on every pull request
+alongside the existing jobs (10s and 72s respectively).
+
+### Fixed
+
+**The egress allowlist's `.env.example` and the port binding are now
+verifiable.** Beyond confirming what 1.10.2 claimed, one result is stronger
+than the argument made for it: a value trying to widen the observer's port
+binding does not merely fail to escape the literal `127.0.0.1` prefix — compose
+**rejects the file outright** with `invalid IP address`.
+
+### Known
+
+**An internal-host block is attributed to the allowlist in the audit trail**
+when both addons deny — `001_allowlist.py` runs second and overwrites the
+response, so a shape with an enforcing allowlist records `reason=allowlist` for
+what is actually an agent probing the credential broker. Not a weaker
+boundary: the allowlist only sets a response when it denies, so listing
+`broker` in an allowlist cannot lift the policy block. Tracked as #87.
+
+### Upgrading
+
+Nothing to do.
+
+---
+
 ## 1.11.0 — 2026-08-15
 
 A second kind of template, and the directory move that makes room for it. No

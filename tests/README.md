@@ -103,6 +103,22 @@ as anything about permissions.
 `chmod 0644` whatever you generate and mount. Files written with `cat >` or
 `printf >` already are, under a normal umask.
 
+### `20-boundary` skips the template during a release
+
+The template must name the version being cut — `00-config-lint` fails if it
+lags — but that tag is only created after the release PR merges. So for as long
+as the PR is open, the template pins a ref nothing can build from, and the
+suite skips that shape rather than failing:
+
+```
+SKIP template — pins v1.11.1, which is not tagged yet
+```
+
+Scoped to a tag genuinely absent from the remote, so a typo or a pin to
+something that never existed still fails. An `ls-remote` that does not answer
+at all is treated as "do not skip", so an offline run cannot quietly pass by
+skipping everything.
+
 ### A killed `stacks` run can break the next one
 
 Each shape brought up by `20-boundary` creates two Docker networks, and

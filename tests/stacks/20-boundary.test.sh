@@ -112,9 +112,38 @@ probe_body() {
     -s --max-time 5 "$@" 2>/dev/null
 }
 
+# pinned_tag_missing <src-dir> — true when the shape pins a release tag that
+# does not exist on the remote yet.
+#
+# This is not hypothetical, and it happens every release: the template must
+# name the version being cut (00-config-lint fails if it lags), but that tag is
+# only created AFTER the release PR merges. So on a release branch the template
+# pins a ref nothing can build from, for exactly as long as the PR is open.
+#
+# Skipped rather than failed, and only for a tag that is genuinely absent — a
+# typo, or a pin to something that never existed, still fails the build below.
+pinned_tag_missing() {
+  local tag
+  tag=$(grep -ohE 'secure-agent-lab\.git#v[0-9]+\.[0-9]+\.[0-9]+' "$1/compose.yaml" 2>/dev/null \
+        | head -1 | sed 's/.*#//')
+  [ -n "$tag" ] || return 1
+  # Only trust an ls-remote that actually answered: no network must not read as
+  # "no tag", or an offline run would skip everything and call it a pass.
+  local out
+  out=$(git ls-remote --tags origin "refs/tags/$tag" 2>/dev/null) || return 1
+  [ -z "$out" ] && { printf '%s' "$tag"; return 0; }
+  return 1
+}
+
 check_shape() { # check_shape <label> <src-dir>
-  local label="$1" src="$2" dir proj
+  local label="$1" src="$2" dir proj missing
   suite "$label — the stack comes up from its own compose file"
+
+  if missing=$(pinned_tag_missing "$src"); then
+    skip "$label — pins $missing, which is not tagged yet" \
+         "expected while a release PR is open; the tag is cut after it merges"
+    return
+  fi
 
   if ! dir=$(up "$label" "$src"); then
     ko "$label — services did not become healthy" \
