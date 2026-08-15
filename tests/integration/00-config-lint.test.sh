@@ -148,7 +148,8 @@ suite "audit events reference an exception only via .code or .name"
 for f in stack/broker/*.js stack/proxy/*.py examples/*/broker/*.js \
          examples/*/.devcontainer/broker/*.js examples/*/proxy/*.py \
          examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
-         bank/*/broker/*.js bank/*/proxy/*.py; do
+         bank/*/broker/*.js bank/*/proxy/*.py \
+         template/provider/*/broker/*.js template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_exception_quoted "$f"); then ok "$(basename "$f") — exception referenced safely or not at all"
   else ko "$f — audit event quotes an exception" "$bad"; fi
@@ -253,8 +254,12 @@ done
 # paragraph warning that the path includes the query string. A deployment
 # following it built the leak the release was written to prevent. Prose
 # mentions are backticked; code blocks are not.
+# bank/ and the skeleton are in scope for the same reason PLAYBOOK.md is: this
+# check exists because a RECOMMENDED snippet carried the bug, and those are the
+# other two places a recommended snippet lives. template/provider/ especially —
+# it is the file whose entire purpose is to be copied.
 for f in PLAYBOOK.md examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py \
-         stack/proxy/addons/*.py; do
+         stack/proxy/addons/*.py bank/*/proxy/*.py template/provider/*/proxy/*.py; do
   [ -f "$f" ] || continue
   if bad=$(inv_raw_path_split "$f"); then ok "$(basename "$f") — no \"/\" split off a raw path"
   else ko "$f — splits a raw path on \"/\", so the last segment holds the query string" "$bad"; fi
