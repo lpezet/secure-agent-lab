@@ -8,6 +8,76 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.9.2 — 2026-08-15
+
+A security fix. **An uppercased hostname bypassed the internal-host block
+entirely**, in every release up to and including 1.9.1.
+
+### Fixed
+
+**`000_policy.py` compared the host without normalising it.**
+
+```
+curl --proxy http://proxy:8080 http://BROKER:8080/github/token   → 200, the broker's response
+curl --proxy http://proxy:8080 http://broker:8080/github/token   → 403
+```
+
+DNS is case-insensitive, so `BROKER` reaches the same container `broker` does,
+and the addon's `host in _INTERNAL_HOSTS` against a lowercase set did not
+match. A trailing root dot — `broker.` — did the same thing.
+
+This is not a weakened defence-in-depth layer. The proxy sits on both `secure`
+and `lab`, so a request *through the proxy* is the exact path this addon exists
+to close; on that path it is the only control, and Docker network isolation
+does not back it up. What got through was `/github/token`, `/anthropic/cred`
+and every other broker route — the raw credentials cred-gateway deliberately
+does not expose.
+
+Every other addon already handled this. `001_allowlist.py` lowercases before
+matching, and `hostmatch.normalize()` exists for precisely this. This file was
+the only one doing neither, which is what made it findable.
+
+The fix normalises both the real destination and the claimed one — lowercase,
+strip a `:port`, strip a trailing root dot — through a local `_norm()` rather
+than `hostmatch.normalize`. Deployments **vendor** this file, and a deployment's
+image may be built from a tag older than the 1.7.0 that added `hostmatch.py`;
+an addon importing a module its image does not carry fails to load and takes
+every destination down with it, which is worse than the bug. Both examples are
+pinned below 1.7.0 and `00-config-lint` enforces this.
+
+Found while starting #62, which will bake this addon into the image and remove
+the vendoring hazard that makes the fix travel slowly. Proven before it was
+fixed: the assertions were committed with no fix and CI returned
+`expected: 403 | actual: 200`, then the fix turned them green. The PR gate that
+answered it had existed for three days (1.9.1).
+
+### Upgrading
+
+**This one has a manual step, and skipping it leaves the bypass open.**
+
+The policy addon is a file your deployment owns, so a new image does not carry
+the fix to you. Repin to `v1.9.2` **and** re-vendor `proxy/000_policy.py` from
+`stack/proxy/addons/` at that tag:
+
+```bash
+scripts/check-drift.sh /path/to/your/deployment
+```
+
+reports it as drift once you have repinned. Until both halves are done, the
+deployment keeps the vulnerable copy.
+
+If you cannot repin immediately, the one-line mitigation is to normalise both
+sides of the comparison in your existing copy:
+
+```python
+if _norm(host) in _INTERNAL_HOSTS or _norm(flow.request.pretty_host) in _INTERNAL_HOSTS:
+```
+
+with `_norm` as written in `stack/proxy/addons/000_policy.py` at this tag. It
+depends on nothing the image provides, so it is safe on any pin.
+
+---
+
 ## 1.9.1 — 2026-08-15
 
 No boundary change. The suite that guards the boundary now runs on every pull
