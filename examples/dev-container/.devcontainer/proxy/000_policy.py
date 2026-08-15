@@ -6,18 +6,27 @@ plain HTTP proxy requests (e.g. curl --proxy http://proxy:8080 http://broker:808
 and the proxy would happily forward them. This addon intercepts and rejects
 any such request before it is forwarded.
 
+**This file is baked into the proxy image** at /opt/agent-proxy/addons/, and
+entrypoint.sh loads it ahead of anything the deployment mounts at /addons. A
+control the deployment does not get to choose belongs in the image — the same
+reason cred-gateway bakes its nginx.conf instead of mounting it. A deployment
+that still vendors a copy gets a warning at startup and the baked copy wins.
+
 Note: this matches by hostname, not IP. Docker network isolation is the
 primary control that prevents lab from routing to broker's IP directly —
-broker is on `secure` only, which lab has no membership in. This addon is
-a defence-in-depth layer, not the sole barrier.
+broker is on `secure` only, which lab has no membership in. On the path this
+addon covers, though — a request *through* the proxy, which sits on both
+networks — there is no second barrier behind it.
 TODO: consider flipping to default-deny (allowlist of known-good external
 hosts) as a hardening pass once the set of required destinations is known.
 """
+import os
+
 from mitmproxy import http, ctx
 
 import audit
 
-_INTERNAL_HOSTS = {"broker", "cred-gateway"}
+_DEFAULT_INTERNAL_HOSTS = "broker,cred-gateway"
 
 
 def _norm(host: str) -> str:
@@ -47,6 +56,40 @@ def _norm(host: str) -> str:
         # splitting it would silently truncate the address.
         h = h.split(":", 1)[0]
     return h.rstrip(".")
+
+
+def _configured_hosts() -> set:
+    """Which hostnames count as internal.
+
+    Deployment configuration on the proxy service, read once at startup from
+    POLICY_INTERNAL_HOSTS (comma-separated) so a stack that renames its
+    services can still name them. Never request data: nothing the lab container
+    sends can widen or narrow this set. That is the same rule that took
+    X-Cf-Profile out of 030_cloudflare.py — which credential, or which control,
+    applies is the deployment's choice and not the caller's.
+
+    Normalised on the way in, so a deployment writing "Broker" or "broker."
+    gets the host it meant rather than an entry that matches nothing.
+    """
+    raw = os.environ.get("POLICY_INTERNAL_HOSTS") or _DEFAULT_INTERNAL_HOSTS
+    return {n for n in (_norm(h) for h in raw.split(",")) if n}
+
+
+_INTERNAL_HOSTS = _configured_hosts()
+
+
+def running() -> None:
+    # A security control that silently blocks nothing is worth saying out loud
+    # once, so a misconfigured POLICY_INTERNAL_HOSTS is visible in the log
+    # rather than only in what fails to be blocked.
+    if _INTERNAL_HOSTS:
+        ctx.log.info(
+            "policy: blocking internal host(s): " + ", ".join(sorted(_INTERNAL_HOSTS))
+        )
+    else:
+        ctx.log.warn(
+            "policy: NO internal hosts configured — this addon will block nothing"
+        )
 
 
 def _destination(flow: http.HTTPFlow) -> str:

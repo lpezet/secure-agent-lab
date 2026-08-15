@@ -36,12 +36,28 @@ paying for e2e.
 and on every push to `main`, as two jobs: `lint` (the docker-free band —
 `00 05 06 07 08`) and `integration` (the whole tier).
 
-**e2e is not there, and must not be added to anything `pull_request` can
-trigger.** This is a public repo, so a fork PR that edits a test file runs
-attacker-authored code in the job — and that tier's job would be the one
-holding the dedicated App's private key. e2e belongs in its own workflow on
-`workflow_dispatch` + `schedule`. The workflow's `permissions: contents: read`
-is what keeps the PR gate credential-free by construction.
+**e2e does not run in CI at all, by decision rather than by omission**
+(closing note on #61). Its inputs are a GitHub App private key, an Anthropic
+key or OAuth token, and a GCP ADC file carrying the operator's own refresh
+token; storing those as repository secrets means putting live personal
+credentials in a system this repo exists to treat as untrusted, to buy a
+nightly re-run of assertions the integration tier already covers for free.
+
+So there is no e2e workflow, scheduled or otherwise, and **nothing in
+`.github/` gets a credential**. The rule is stronger for being permanent: this
+is a public repo, so a fork PR that edits a test file runs attacker-authored
+code in the job. `permissions: contents: read` and the absence of any `secrets`
+reference are the design, not a stepping stone.
+
+Run e2e locally — see [`e2e/README.md`](e2e/README.md).
+
+Note that a push to a branch with no PR open triggers nothing: the workflow
+fires on `pull_request` and on `push` to `main`. To check a branch before
+opening a PR, dispatch it by hand:
+
+```bash
+gh workflow run tests.yml --ref your-branch
+```
 
 ## Shared code
 

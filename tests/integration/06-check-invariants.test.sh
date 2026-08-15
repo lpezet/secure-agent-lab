@@ -217,12 +217,36 @@ cp "$d/proxy/000_policy.py" "$d/proxy/060_copy.py"
 out=$(run "$d")
 check_contains "the same code under another name is flagged" "$out" "decides on the client-supplied Host header"
 
-suite "a missing or misordered policy addon is a finding"
+suite "an unvendored policy addon is a note, not a failure"
+# It was a failure until 1.10.0, when the proxy image started carrying the
+# addon: from that release an absent copy is the correct shape and a vendored
+# one is dead weight. Which case a deployment is in depends on its pin, and
+# this script deliberately reads no pin — check-drift.sh owns that question now
+# and answers it per tag. What stays here is the signal, downgraded, so it does
+# not disappear for someone running only this script.
 d=$(mkdep nopolicy)
 rm "$d/proxy/000_policy.py"
 out=$(run "$d")
+check_contains "does not fail the run on its own" "$out" "EXIT=0"
+check_contains "still says something" "$out" "000_policy.py is not vendored"
+check_contains "and names the version the answer turns on" "$out" "v1.10.0"
+check_contains "and points at the script that knows the pin" "$out" "check-drift.sh"
+
+suite "a misordered policy addon is still a failure"
+# The other half of the old suite name, which never actually asserted it. This
+# one is a pure property of the files present — no pin involved — so unlike the
+# check above it stays a failure. A vendored policy addon that loads after a
+# provider addon lets that addon act on a request the policy would have denied.
+#
+# Done by adding a file that sorts ahead of it rather than by renaming the
+# policy addon: only 000_policy.py is exempt from the pretty_host rule, so a
+# renamed copy trips *that* check instead and the suite would pass for the
+# wrong reason. It did, on the first attempt here.
+d=$(mkdep misordered)
+printf 'def request(flow):\n    pass\n' > "$d/proxy/000_aaa.py"
+out=$(run "$d")
 check_contains "exits 1" "$out" "EXIT=1"
-check_contains "names it" "$out" "000_policy.py is absent"
+check_contains "names what loaded first instead" "$out" "first addon is 000_aaa.py"
 
 suite "unmediated egress is a finding, in all three of its shapes"
 # internal: true on the lab network is what makes 001_allowlist.py enforcing
