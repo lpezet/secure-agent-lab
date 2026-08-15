@@ -23,6 +23,18 @@ That bar is what makes an entry *data*. If installing GitHub requires separately
 knowing to set `credential.useHttpPath false`, the knowledge lives in a human or
 in an installer, and adding a provider needs per-provider code somewhere.
 
+**The bar is about providers, not about the whole stack.** A bank entry adds a
+credential the lab can spend; it is not where the boundary comes from. The
+controls that are not anyone's choice — the internal-host block and the egress
+allowlist — live in the **images**, from `v1.10.0` on: `000_policy.py` and
+`001_allowlist.py` ship inside the proxy, and cred-gateway's default-deny is
+baked into its `nginx.conf`. You do not install those, cannot omit them, and
+will not find them here. That division is deliberate, and it exists because a
+deployment built from an empty `proxy/` directory once reached
+`broker:8080/anthropic/cred` and got a real credential back
+([#62](https://github.com/lpezet/secure-agent-lab/issues/62)) — the reader had
+met this bar and reasonably concluded there was nothing else to know.
+
 ## Layout
 
 ```
