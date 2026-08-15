@@ -78,6 +78,19 @@ check_not_contains "spoofed request never carries broker content" \
 check "spoofed Host on cred-gateway is still blocked" "403" \
   "$(http_code "http://cred-gateway:8080/github/credential" -H "Host: external-api" --proxy "http://$PX:8080")"
 
+suite "case does not bypass the block"
+# DNS is case-insensitive, so http://BROKER:8080/ resolves to the same
+# container. If the addon compares the host case-sensitively, one shifted
+# letter is a complete bypass of the internal-host block.
+check "GET http://BROKER:8080/github/token is blocked" "403" \
+  "$(http_code "http://BROKER:8080/github/token" --proxy "http://$PX:8080")"
+check_not_contains "and never carries broker content" \
+  "$(http_body "http://BROKER:8080/github/token" --proxy "http://$PX:8080")" "BROKER-HIT"
+check "GET http://Cred-Gateway:8080/ is blocked" "403" \
+  "$(http_code "http://Cred-Gateway:8080/github/credential" --proxy "http://$PX:8080")"
+check "claiming Host: BROKER is denied too" "403" \
+  "$(http_code "http://external-api:8080/ping" -H "Host: BROKER" --proxy "http://$PX:8080")"
+
 # The reverse direction fails closed: claiming to be an internal host is denied
 # even when the real destination is external. Harmless over-blocking, and it
 # keeps the rule easy to reason about.
