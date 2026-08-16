@@ -66,5 +66,34 @@ sleep 1.5
 check_contains "post-rotation line is picked up from offset 0" \
   "$(http_body "http://$OBS:9000/events" --max-time 2 -N)" "credential_issued"
 
+suite "/events responds before anything has been logged"
+# A deployment that has not emitted an audit event yet has an empty backlog, so
+# the SSE handler writes no body. Node holds headers until the first write, so
+# without an explicit flush the client gets NOTHING — no headers, no error, just
+# a hang — and the dashboard shows "connecting…" on a stack that is working
+# fine. Needs its own container: $AUDIT has had lines in it since line 18.
+EMPTY="/tmp/$RUN_ID-audit-empty"
+mkdir -p "$EMPTY"
+OBS2="$RUN_ID-observer-empty"
+docker run -d --name "$OBS2" --network "$NET" \
+  -v "$EMPTY:/var/log/audit:ro" "$IMG" >/dev/null
+track_container "$OBS2"
+
+if ! wait_http "$OBS2:9000/healthz" 200 "observer (empty trail)"; then
+  ko "observer did not start against an empty audit dir" "$(docker logs "$OBS2" 2>&1 | tail -20)"
+else
+  # --max-time always trips: SSE never closes. What is under test is whether
+  # curl saw response headers before the timeout (200) or nothing at all (000).
+  check "headers arrive on an empty trail" "200" \
+    "$(http_code "http://$OBS2:9000/events" --max-time 3 -N)"
+  # And the stream is live, not merely opened: a line appended after the fact
+  # still reaches a client that connected while the trail was empty.
+  echo '{"ts":"2026-01-01T00:00:03Z","service":"broker","event":"token_issued","provider":"github"}' >> "$EMPTY/broker.jsonl"
+  sleep 1.5
+  check_contains "a line logged later still streams" \
+    "$(http_body "http://$OBS2:9000/events" --max-time 2 -N)" "token_issued"
+fi
+rm -rf "$EMPTY"
+
 rm -rf "$AUDIT"
 finish
