@@ -22,7 +22,24 @@ told apart from a failing assertion (exit 1).
 | Tier | Credentials | Cost | Covers |
 |---|---|---|---|
 | [`integration/`](integration/README.md) | none — stubs and fixtures | free, ~60s | The security boundaries: whitelist behaviour, proxy host matching, egress allowlist, mount isolation |
+| `stacks/` | none | free, ~80s (minutes cold) | The shapes this repo *ships*, run rather than read: the template and both examples, built by compose from the tag each one pins |
 | [`e2e/`](e2e/README.md) | real, from a dedicated App and creds dir | real API quota | The paths a stub cannot reach: HTTPS/CONNECT, the CA cert lifecycle, `git push` through the credential helper, live token minting |
+
+**Why `stacks/` is not part of `integration/`.** The integration tier proves a
+property against hand-built containers on a hand-made network, which is the
+right way to test an addon and says nothing about whether a *deployment* is
+wired correctly. `stacks/` starts each shape from its own `compose.yaml`, with
+images compose builds from the tag that file pins — so it is the only tier that
+notices a repin landing badly, or the template moving, or a mount going away.
+It is free and needs no credentials; it is out of the bare default only because
+it builds images.
+
+Two bands. `10-compose-config` asks compose what the files *mean* — port
+interpolation, profile selection — and builds nothing, so it runs in about a
+second. `20-boundary` brings each shape up and checks the boundary from the
+`lab` network. `lab` itself is never started: its image is a slow local build
+and its `setup.sh` fetches a GitHub App identity, so it is *supposed* to fail
+without credentials.
 
 A bare `tests/run.sh` deliberately does not run e2e. That tier spends real API
 quota, mints real tokens and pushes to a real repository — it should be
@@ -85,6 +102,40 @@ as anything about permissions.
 
 `chmod 0644` whatever you generate and mount. Files written with `cat >` or
 `printf >` already are, under a normal umask.
+
+### `20-boundary` skips the template during a release
+
+The template must name the version being cut — `00-config-lint` fails if it
+lags — but that tag is only created after the release PR merges. So for as long
+as the PR is open, the template pins a ref nothing can build from, and the
+suite skips that shape rather than failing:
+
+```
+SKIP template — pins v1.11.1, which is not tagged yet
+```
+
+Scoped to a tag genuinely absent from the remote, so a typo or a pin to
+something that never existed still fails. An `ls-remote` that does not answer
+at all is treated as "do not skip", so an offline run cannot quietly pass by
+skipping everything.
+
+### A killed `stacks` run can break the next one
+
+Each shape brought up by `20-boundary` creates two Docker networks, and
+Docker's default address pools are finite. A run that is interrupted before its
+teardown leaves six behind; enough of those and the *next* run fails with
+
+```
+Error response from daemon: all predefined address pools have been fully subnetted
+```
+
+which reads as a broken stack and is not. The suite traps `INT` and `TERM` as
+well as `EXIT`, and sweeps anything left by an earlier run of itself at
+startup — but a `kill -9` can outrun both. To clear it by hand:
+
+```bash
+docker network ls --format '{{.Name}}' | grep '^sattest-' | xargs -r docker network rm
+```
 
 ### Docker Desktop on WSL
 

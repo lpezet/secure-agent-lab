@@ -229,6 +229,8 @@ When a release branch is ready:
 
 1. Add a `CHANGELOG.md` entry directly on the release branch (see existing entries for format — this project versions the security boundary, not the code, so most entries need no "Upgrading" section).
 1. **Repin `template/deployment/` to the version being released.** A template fetched at a tag must name that tag, or the artefact someone copied at `vX.Y.Z` builds a different release's images. `00-config-lint` fails when the template falls behind the newest `CHANGELOG` heading, so adding the entry in the step above is what surfaces this — it is a build failure rather than something to remember. The examples are deliberately *not* covered by that check: an example may lag on purpose, and the lint derives what to expect from each one's own pin (#64).
+
+   Expect `tests/stacks/20-boundary` to **skip the template** for the duration of the release PR, saying so: the repin names a tag that is only created once that PR merges, so nothing can build from it yet. The skip is scoped to a tag that is genuinely absent from the remote, so a typo still fails.
 2. Open a PR from the release branch into `main`, get it reviewed, merge it.
 3. Tag `vX.Y.Z` on `main`.
 4. **Sync forward only.** Merge `main` into every still-open release branch whose version is *above* the tag you just cut. Never merge it into one below. The direction is the whole rule:

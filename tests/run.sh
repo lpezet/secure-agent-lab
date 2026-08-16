@@ -4,13 +4,18 @@
 #
 #   tests/run.sh                     # integration — the safe default
 #   tests/run.sh integration 20 30   # → tests/integration/run.sh 20 30
+#   tests/run.sh stacks              # → tests/stacks/run.sh
 #   tests/run.sh e2e                 # → tests/e2e/run.sh
-#   tests/run.sh all                 # both, integration first
+#   tests/run.sh all                 # all three, cheapest first
 #
 # A bare `tests/run.sh` deliberately does NOT run e2e. That tier spends real
 # API quota, mints real tokens and pushes to a real repository, so it has to be
 # something you asked for by name rather than something the obvious command
 # does to you.
+#
+# `stacks` is free but not fast: it builds this repo's images from a pinned tag
+# and stands the deployment shapes up, which is minutes rather than seconds. It
+# is left out of the bare default for that reason alone.
 #
 # `all` is fail-fast: if integration is red there is no point paying for e2e,
 # and its failures would most likely be downstream noise anyway.
@@ -20,7 +25,7 @@
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TIERS=(integration e2e)
+TIERS=(integration stacks e2e)
 
 if [ -t 1 ]; then
   R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'
@@ -38,7 +43,7 @@ usage() {
 # shorthand that existed before this facade did.
 selected=(integration)
 case "${1-}" in
-  integration|e2e) selected=("$1"); shift ;;
+  integration|stacks|e2e) selected=("$1"); shift ;;
   all)             selected=("${TIERS[@]}"); shift ;;
   -h|--help)       usage 0 ;;
 esac
