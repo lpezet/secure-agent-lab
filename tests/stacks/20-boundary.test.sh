@@ -87,9 +87,26 @@ up() {
   PROJECTS+=("$dir")
   # stderr, not stdout: this function's stdout is the project directory.
   printf '  building and starting %s (from its pinned tag — minutes on a cold cache)\n' "$name" >&2
-  if ! (cd "$dir" && docker compose up -d --wait "${SERVICES[@]}" >/dev/null 2>&1); then
+  # `up -d` then poll, rather than `up -d --wait`. --wait obeys each service's
+  # own healthcheck budget, and those are the SHIPPED ones — the broker allows
+  # 30s (5s start_period, 5 retries at 5s). That is generous for one stack on
+  # an idle machine and tight for the third stack on a loaded CI box, which
+  # made this flake. Widening the healthchecks would change the artefact under
+  # test to suit the test; polling here does not.
+  if ! (cd "$dir" && docker compose up -d "${SERVICES[@]}" >/dev/null 2>&1); then
     return 1
   fi
+  local i states
+  for i in $(seq 1 90); do   # 180s
+    states=$(cd "$dir" && docker compose ps --format '{{.Service}}:{{.Health}}' 2>/dev/null)
+    # Every named service reporting healthy, and none reporting otherwise.
+    if [ "$(printf '%s\n' "$states" | grep -c ':healthy$')" = "${#SERVICES[@]}" ]; then
+      break
+    fi
+    case "$states" in *:unhealthy*) return 1 ;; esac
+    sleep 2
+  done
+  [ "$(printf '%s\n' "$states" | grep -c ':healthy$')" = "${#SERVICES[@]}" ] || return 1
   printf '%s' "$dir"
 }
 

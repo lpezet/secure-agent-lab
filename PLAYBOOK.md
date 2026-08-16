@@ -478,6 +478,27 @@ the events simply never exist. Whenever you add a provider or addon, add the
 `logEvent`/`log_event` calls described under "A custom provider" in the same
 edit.
 
+**What a trail line is.** One JSON object per line, **compact** — no space
+after `:` or `,` — with `ts`, `service` and `event` first and per-event fields
+after:
+
+```
+{"ts":"2026-08-16T01:49:57+00:00","service":"proxy","event":"blocked","reason":"internal_host","host":"broker"}
+```
+
+`ts` is `%Y-%m-%dT%H:%M:%S+00:00`: no milliseconds, and `+00:00` rather than a
+`Z` suffix, because nginx's `$time_iso8601` has no `Z`-suffixed form and
+cred-gateway cannot be argued with. That is also why the format is compact —
+nginx's `log_format` is hand-written and sets the shape the other two follow.
+
+This matters because three services write into one file. Both spellings are
+valid JSON and any real parser is unaffected, but a `grep` written against one
+service's lines silently returns nothing for the others, which reads as an
+absence of events rather than a formatting difference. `audit.py` was the odd
+one out until #92 and it cost time three separate times. If you add a fourth
+writer, it emits compact JSON with those three fields, or it will be the next
+one.
+
 **What is safe to log — and who guarantees it.** The trail is a plaintext
 file on a shared volume that `observer` renders over HTTP, so a credential
 written into it has left the boundary the rest of this stack exists to

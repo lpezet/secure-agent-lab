@@ -19,14 +19,26 @@ _AUDIT_LOG = os.environ.get("AUDIT_LOG")
 def log_event(event: str, **fields) -> None:
     if not _AUDIT_LOG:
         return
-    line = json.dumps({
-        # +00:00, not a "Z" suffix — matches cred-gateway's nginx
-        # $time_iso8601, which has no "Z"-suffixed form.
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
-        "service": "proxy",
-        "event": event,
-        **fields,
-    })
+    line = json.dumps(
+        {
+            # +00:00, not a "Z" suffix — matches cred-gateway's nginx
+            # $time_iso8601, which has no "Z"-suffixed form.
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            "service": "proxy",
+            "event": event,
+            **fields,
+        },
+        # Compact, like the other two writers. json.dumps defaults to
+        # (", ", ": "), which made this the only one of three emitting
+        # `"event": "blocked"` while audit.js and cred-gateway's nginx
+        # log_format emit `"event":"blocked"`. Both are valid JSON and any
+        # real parser is unaffected — but three services share one trail, so
+        # a grep written against one service's lines silently missed the
+        # others, which reads as an absence of events rather than a
+        # formatting split. Same reasoning as the timestamp above: nginx sets
+        # the format, because it is the writer that cannot be argued with.
+        separators=(",", ":"),
+    )
     try:
         with open(_AUDIT_LOG, "a") as f:
             f.write(line + "\n")

@@ -150,9 +150,8 @@ if [ -z "$t" ]; then
   finish
 fi
 ok "trail is non-empty ($(printf '%s' "$t" | wc -l) events)"
-# json.dumps default separators — `"event": "x"`, with the space.
-check_contains "an injection was recorded" "$t" '"event": "token_injected"'
-check_contains "a block was recorded" "$t" '"event": "blocked"'
+check_contains "an injection was recorded" "$t" '"event":"token_injected"'
+check_contains "a block was recorded" "$t" '"event":"blocked"'
 
 suite "no taint reaches the trail"
 check_not_contains "broker-issued credential is not logged" "$t" "$INJECTED_TAINT"
@@ -173,10 +172,10 @@ suite "the endpoint field is a bounded prefix, and the bound is a vendor bet"
 # or a token in a segment inside the bound, PREFIX_TAINT moves from "expected
 # here" to a leak and these flip. Read a failure as "re-check what that
 # vendor puts in that segment", not as a broken test.
-check_contains "anthropic keeps segment 2 (/v1/<method>)" "$t" "\"endpoint\": \"/v1/$PREFIX_TAINT\""
+check_contains "anthropic keeps segment 2 (/v1/<method>)" "$t" "\"endpoint\":\"/v1/$PREFIX_TAINT\""
 check_contains "cloudflare keeps segment 3 (/client/v4/<resource>)" "$t" \
-  "\"endpoint\": \"/client/v4/$PREFIX_TAINT\""
-gh_line=$(printf '%s\n' "$t" | grep '"provider": "github"' | head -1)
+  "\"endpoint\":\"/client/v4/$PREFIX_TAINT\""
+gh_line=$(printf '%s\n' "$t" | grep '"provider":"github"' | head -1)
 check_not_contains "github logs no path at all" "$gh_line" "endpoint"
 
 # ------------------------------------------- positive control
@@ -204,7 +203,7 @@ else
   # The subtlety the split("/") version turns on, asserted per line: the
   # token is in segment 1 so it never appears, and the parse looks careful.
   # Only the query string comes through — attached to segment 2.
-  split_line=$(printf '%s\n' "$lt" | grep '"event": "naive_split"' || true)
+  split_line=$(printf '%s\n' "$lt" | grep '"event":"naive_split"' || true)
   check_not_contains "split(\"/\") keeps the path-segment token out" "$split_line" "$URLPATH_TAINT"
   check_contains "...but carries the query string into the trail" "$split_line" "$QUERY_TAINT"
 fi

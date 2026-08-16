@@ -61,13 +61,12 @@ audit_trail() {
 
 # audit_has <trail> <field> <value> — 1 if the trail contains that pair.
 #
-# Whitespace-tolerant on purpose. The two writers disagree: audit.js emits
-# `"service":"broker"` and audit.py emits `"service": "proxy"`, because
-# JSON.stringify is compact and json.dumps is not. Both are valid JSON and
-# observer parses per line, so nothing is broken — but a string match written
-# for one silently misses the other, which is a trap worth not laying twice.
+# Exact, not whitespace-tolerant. It used to be tolerant because audit.py alone
+# emitted `"service": "proxy"` while audit.js and cred-gateway's nginx emitted
+# the compact form; all three agree since #92. Tolerance would now hide a
+# writer drifting back, which is the thing that cost time in the first place.
 audit_has() {
-  printf '%s\n' "$1" | grep -qE "\"$2\"[[:space:]]*:[[:space:]]*\"$3\"" && echo 1 || echo 0
+  printf '%s\n' "$1" | grep -qF "\"$2\":\"$3\"" && echo 1 || echo 0
 }
 
 # audit_field <json-line-stream> <field> — values of a field, one per line.
