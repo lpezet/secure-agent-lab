@@ -8,6 +8,104 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.13.0 — 2026-08-16
+
+A bank entry now ships the egress it needs. No boundary change — a minor
+because the entry *directory convention* changed, and an installer consuming
+the bank needs to know there is a new file to copy.
+
+### Added
+
+**`bank/<name>/allowlist`** — the hosts an entry needs, in the allowlist's own
+syntax, for all four entries.
+
+Installing an entry produced a lab that could not use it. The entry brought its
+broker provider, its addon and its credential wiring, and then every request it
+made was denied, because the deployment's allowlist is the operator's and
+nothing seeded it. So the operator had to work out, per provider, both the
+hostnames and the methods.
+
+The methods are the bad case. `hosts` carries none, and `001_allowlist.py`
+defaults an entry with none to `GET,HEAD,OPTIONS` — so the obvious guess
+
+```
+api.anthropic.com
+```
+
+is syntactically fine, reads as correct, and blocks every request Claude Code
+makes, all of which are POSTs. The symptom is every call failing on a freshly
+installed provider, which reads as "the credential is wrong".
+
+A file rather than a manifest field, deliberately. `provider.schema.json` is
+`additionalProperties: false`, so **any** new field makes a conforming older
+installer refuse every manifest — a `schema_version` bump, which by that
+field's own contract should happen on the order of never. An entry is already a
+directory of files and the directory is not governed by that rule: an older
+installer does not copy the file and behaves exactly as it did before. The file
+also gets comments, which is how an optional host expresses itself — no
+`required: true|false` to design, no precedence to write down, the default is
+deny, and the reason sits next to the host.
+
+Not folded into `hosts` either, which is the same objection from the other end.
+`hosts` is where the addon **attaches a credential**; the allowlist is where the
+lab **may send a request**. `github.com` belongs in the second and must never
+appear in the first, and `*.workers.dev` is reasonable to make reachable and a
+serious bug to inject for. Keeping the lists apart makes that un-writable rather
+than merely discouraged.
+
+Three things in the shipped files are worth reading before writing your own:
+`bank/github/allowlist` carries `github.com` uncommented and *not* in `hosts`,
+because that entry ships the git credential helper; `bank/gcp/allowlist` lists
+`sts.` and `oauth2.googleapis.com` even though `040_gcp.py` answers them
+locally, because `001` runs first and a denied destination never reaches the
+addon that would have answered it; `bank/cloudflare/allowlist` carries
+`*.workers.dev` commented, as the clearest case of reachable-but-never-injected.
+
+Suite E in `00-config-lint` enforces the direction that is silent: every host in
+`hosts` appears **uncommented** in the entry's allowlist. A host the addon
+injects into but the lab cannot reach is a credential minted, audited as issued,
+and never spent. The reverse is deliberately not checked — requiring
+`allowlist ⊆ hosts` would make the dangerous direction the tidy one. It also
+fails an entry that omits METHODS.
+
+Requested as [#99](https://github.com/lpezet/secure-agent-lab/issues/99), and
+installed by [`sal`](https://github.com/lpezet/secure-agent-lab-cli) from the
+other side.
+
+### Removed
+
+**`stack/proxy/allowlist.sample`.** The docs stopped pointing at it in 0.2.0
+and the file was never deleted; the only remaining reference in the tree was
+the CHANGELOG line recording that deprecation. Every line in it was a bare
+domain, so anyone still finding it copied the exact failure above.
+`stack/compose.yaml`'s commented allowlist mount now says where to look
+instead — `template/deployment/allowlist` for the syntax, each bank entry's own
+file for its hosts and methods.
+
+### Changed
+
+**The schema's `hosts` description.** It claimed "Load-bearing: seeds
+`001_allowlist.py`", which has not described anything since the allowlist
+became a file the deployment owns. It now says what `hosts` is for and what it
+is not. Description-only, so no `schema_version` bump — that field's contract
+excludes rewording.
+
+**`PLAYBOOK.md` step 8 no longer says to append the entry's `hosts`** to the
+allowlist, which was this repo recommending the trap. It says to copy the
+entry's `allowlist` lines verbatim, and a new "Working out an entry's egress"
+section says how to derive them for an entry you are writing.
+
+### Upgrading
+
+**Nothing to do**, and nothing changes for a deployment that already works —
+an allowlist you have already tuned is already correct by definition.
+
+If you installed an entry and something has never worked, this is worth
+re-reading: compare your `/etc/agent-allowlist` against the entry's
+`bank/<name>/allowlist` and check the methods column, not just the hostnames.
+
+---
+
 ## 1.12.1 — 2026-08-16
 
 The observer dashboard connects on a lab that has not logged anything yet. No
