@@ -170,18 +170,17 @@ check_shape() { # check_shape <label> <src-dir>
   # body holding no token, so a check written only against those would pass
   # while the block was gone. Assert the refusal came from the PROXY.
   #
-  # Either proxy refusal counts. Both addons deny an internal host and
-  # 001_allowlist.py runs second, so on a shape whose allowlist is enforcing —
-  # the template, which ships the file with no entries — its message overwrites
-  # the policy addon's. The block is not weaker for that: the allowlist only
-  # sets a response when it denies, so when it permits a host the policy 403
-  # stands. What changes is which reason the audit trail records.
+  # It must be the POLICY addon that refused, not merely some 403.
+  #
+  # Until 1.11.2 this accepted either message, because on a shape with an
+  # enforcing allowlist 001_allowlist.py ran second and overwrote the policy
+  # response (#87). That is fixed, every shape pins past it, and leaving the
+  # check permissive would mean a regression of #87 passed here in silence —
+  # which is the failure mode this repo keeps finding in itself.
   refusal=$(probe_body "$proj" --proxy "http://proxy:8080" "http://broker:8080/github/token")
-  case "$refusal" in
-    *"internal host blocked"*)         ok "$label — refused by the policy addon" ;;
-    *"blocked by allowlist policy"*)   ok "$label — refused by the allowlist addon (enforcing, denies broker too)" ;;
-    *) ko "$label — the refusal did not come from the proxy" "$refusal" ;;
-  esac
+  check_contains "$label — refused by the policy addon, specifically" \
+    "$refusal" "internal host blocked"
+
   # The two bypasses that shipped and were fixed: a spoofed Host header (1.6.0)
   # and an uppercased hostname (1.9.2).
   check "a spoofed Host does not bypass it" "403" \
