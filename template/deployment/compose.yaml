@@ -4,7 +4,7 @@
 # `docker compose up -d`. It is pinned to a release tag, so what it builds is
 # fixed until you repin it deliberately — the same contract bank/<name>/ has.
 #
-#   git clone --depth 1 --branch v1.12.0 \
+#   git clone --depth 1 --branch v1.12.1 \
 #     https://github.com/lpezet/secure-agent-lab.git /tmp/sal
 #   cp -r /tmp/sal/template/deployment ./my-deployment
 #   cp -r /tmp/sal/bank/<name>/broker/*.js         ./my-deployment/broker/
@@ -39,7 +39,7 @@ name: secure-agent-lab
 
 services:
   broker:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/broker
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.1:stack/broker
     volumes:
       # The credential directory. Read-only, and the only place secrets live.
       - ${AGENT_CREDS_DIR:-${HOME}/.config/agent-creds}:/secrets:ro
@@ -74,7 +74,7 @@ services:
     restart: unless-stopped
 
   proxy:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/proxy
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.1:stack/proxy
     depends_on:
       broker:
         condition: service_healthy
@@ -116,7 +116,7 @@ services:
     restart: unless-stopped
 
   cred-gateway:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/cred-gateway
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.1:stack/cred-gateway
     depends_on:
       broker:
         condition: service_healthy
@@ -151,7 +151,7 @@ services:
   # the dashboard, not the audit trail.
   observer:
     profiles: ["observer"]
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/observer
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.1:stack/observer
     volumes:
       - audit-logs:/var/log/audit:ro
     ports:
@@ -185,7 +185,7 @@ services:
   # different non-root uids sharing one directory — can both write to it. Runs
   # as root for exactly that reason; needs no network of its own either.
   log-rotator:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.0:stack/log-rotator
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.12.1:stack/log-rotator
     volumes:
       - audit-logs:/var/log/audit
     restart: unless-stopped
