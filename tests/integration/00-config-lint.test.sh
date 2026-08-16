@@ -191,6 +191,19 @@ for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/a
   else ko "$f — references pretty_host outside a comment" "$bad"; fi
 done
 
+suite "an addon does not act on a request already refused"
+# mitmproxy calls every request hook regardless of whether the flow has been
+# answered, so an addon without the guard overwrites the refusal message of
+# whatever denied first — and an injecting one calls the broker and logs
+# cred_injected for a request that never leaves (#87). 000_policy.py is exempt:
+# it decides first by construction and must never stand aside.
+for f in examples/*/proxy/*.py examples/*/.devcontainer/proxy/*.py stack/proxy/addons/*.py \
+         bank/*/proxy/*.py template/provider/*/proxy/*.py; do
+  [ -f "$f" ] || continue
+  if bad=$(inv_response_guard "$f"); then ok "$(basename "$f") — stands aside once a flow is answered"
+  else ko "$f — acts on a request an earlier addon already refused" "$bad"; fi
+done
+
 suite "addons take no direction from a client-supplied request header"
 # The lab container writes these headers. An addon that binds one to a name is
 # letting the untrusted side steer what the addon does next — and for a

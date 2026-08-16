@@ -175,6 +175,26 @@ inv_exception_quoted() {
 #
 # Same family as inv_pretty_host: both catch a decision made from client-
 # supplied data. This one is the general case, that one the specific host bug.
+# mitmproxy calls every addon's request hook, including after an earlier addon
+# has answered the flow. An addon that does not check leaves two marks: it
+# overwrites the refusal message of whatever denied first, and — if it injects
+# — it calls the broker and logs cred_injected for a request that never leaves.
+# Both are audit-accuracy failures rather than boundary failures, and the
+# second is the one that misleads: the trail claims a credential was spent.
+#
+# 000_policy.py is exempt. It is the first decision by construction, so it has
+# nothing to defer to, and it is the one addon that must never stand aside.
+inv_response_guard() {
+  case "$(basename "$1")" in 000_policy.py) return 0 ;; esac
+  # Only addons that act on requests are in scope.
+  grep -qE '^[[:space:]]*def request\(' "$1" 2>/dev/null || return 0
+  if _inv_strip_py "$1" | grep -qE 'flow\.response[[:space:]]+is[[:space:]]+not[[:space:]]+None'; then
+    _inv_report "$1" ""
+  else
+    _inv_report "$1" "$(grep -nE '^[[:space:]]*def request\(' "$1" | head -1)"
+  fi
+}
+
 inv_header_selector() {
   _inv_report "$1" "$(_inv_strip_py "$1" \
     | grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*flow\.request\.headers\.(get|pop)\(')"
@@ -558,6 +578,7 @@ INV_REGISTRY='raw_path_logged|fail|proxy_py|logs a raw request path, query strin
 raw_path_split|fail|proxy_py|splits a raw path on "/", so the last segment holds the query string
 pretty_host|fail|proxy_py|decides on the client-supplied Host header
 header_selector|fail|proxy_py|binds a client-supplied request header to a name the addon acts on
+response_guard|fail|proxy_py|acts on a request an earlier addon already refused
 injection_wildcard_multitenant|fail|proxy_py|injects a credential for a wildcard suffix anyone can register under
 injection_wildcard|note|proxy_py|injects a credential for a wildcard host suffix — is the whole suffix single-tenant?
 github_com_matched|fail|proxy_py|matches github.com, which the credential helper owns

@@ -111,6 +111,15 @@ def running() -> None:
 
 
 def request(flow: http.HTTPFlow) -> None:
+    # Do not act on a request an earlier addon has already refused. mitmproxy
+    # calls every addon's request hook regardless, so without this an addon
+    # after a denial still runs: overwriting the refusal message, or — worse —
+    # fetching a credential from the broker and logging cred_injected for a
+    # request that never leaves. Deliberately dependency-free, because
+    # deployments vendor this file at pins that may predate any shared helper.
+    if flow.response is not None:
+        return
+
     if _entries is None:
         return
     # flow.request.host is the real destination. Do NOT use pretty_host here:

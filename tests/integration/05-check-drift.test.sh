@@ -87,7 +87,7 @@ check_contains "names it against stack/" "$out" "DRIFT   001_allowlist.py       
 
 suite "a genuinely custom addon is flagged as owned, not as drift"
 d=$(mkdep custom)
-printf 'def request(flow):\n    pass\n' > "$d/proxy/030_fal.py"
+printf 'def request(flow):\n    if flow.response is not None:\n        return\n    pass\n' > "$d/proxy/030_fal.py"
 out=$(run "$d")
 check_contains "exits 0 — ownership is not a failure" "$out" "EXIT=0"
 check_contains "names it custom" "$out" "custom  030_fal.py"
@@ -160,6 +160,8 @@ d=$(mkdep withleak)
 cat > "$d/proxy/090_leaky.py" <<'ADDON'
 import audit
 def request(flow):
+    if flow.response is not None:
+        return
     audit.log_event("cred_injected", provider="x", path=flow.request.path)
 ADDON
 out=$(run "$d")
