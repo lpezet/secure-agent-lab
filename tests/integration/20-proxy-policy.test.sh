@@ -27,7 +27,7 @@ net_up
 curl_up
 # The stub answers to `broker`, `cred-gateway` (blocked names) and
 # `external-api` (a stand-in for a legitimate destination).
-stub_broker_up cred-gateway external-api
+stub_broker_up cred-gateway external-api other-api
 
 # proxy_up <label> [extra docker args...] — start a proxy and wait for it to
 # serve. Echoes the container name. Several variants are needed now that the
@@ -170,5 +170,39 @@ check "a host no longer listed is no longer blocked" "200" \
   "$(http_code "http://broker:8080/healthz" --proxy "http://$PX_CFG:8080")"
 check_contains "startup says what it is blocking" \
   "$(docker logs "$PX_CFG" 2>&1)" "cred-gateway, external-api"
+
+suite "the policy addon's refusal survives an enforcing allowlist"
+# #87: mitmproxy calls every request hook regardless of whether the flow is
+# answered, so 001_allowlist.py — which runs second and also denies an internal
+# host, since broker is on nobody's allowlist — used to overwrite the policy
+# addon's response. Both outcomes were a 403, so the boundary held; what broke
+# was the trail, which recorded reason=allowlist for an agent probing the
+# credential broker. The two events are not the same news.
+ALLOW=$(mktemp); printf 'external-api\n' > "$ALLOW"; chmod 0644 "$ALLOW"
+PX_AL=$(READY_HOST=external-api proxy_up enforcing \
+        -v "$REPO_ROOT/stack/proxy/addons:/addons:ro" \
+        -v "$ALLOW:/etc/agent-allowlist:ro" \
+        -e AUDIT_LOG=/tmp/audit.jsonl) || finish
+
+check "an internal host is still refused" "403" \
+  "$(http_code "http://broker:8080/github/token" --proxy "http://$PX_AL:8080")"
+check_contains "and the POLICY addon is what refused it" \
+  "$(http_body "http://broker:8080/github/token" --proxy "http://$PX_AL:8080")" \
+  "internal host blocked"
+# Spacing differs between the two audit writers, so match the value alone.
+check_contains "the trail attributes it to the internal-host rule" \
+  "$(docker exec "$PX_AL" cat /tmp/audit.jsonl 2>/dev/null)" '"internal_host"'
+# Prove the allowlist is genuinely enforcing, or the checks above pass for the
+# wrong reason with the allowlist never having had an opinion. other-api is
+# EXTERNAL — an internal host would be refused by the policy addon and prove
+# nothing about the allowlist at all.
+check "an unlisted external host is refused by the allowlist" "403" \
+  "$(http_code "http://other-api:8080/ping" --proxy "http://$PX_AL:8080")"
+check_contains "by the allowlist, specifically" \
+  "$(http_body "http://other-api:8080/ping" --proxy "http://$PX_AL:8080")" \
+  "blocked by allowlist policy"
+check "while the listed one still passes" "200" \
+  "$(http_code "http://external-api:8080/ping" --proxy "http://$PX_AL:8080")"
+rm -f "$ALLOW"
 
 finish

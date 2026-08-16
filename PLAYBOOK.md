@@ -642,9 +642,14 @@ in them.
 
 **Proxy** — add a numbered file to the project's `proxy/` directory
 (bind-mounted to `/addons`, loaded alphabetically — pick a prefix that
-puts it after `000_policy.py`). Match `flow.request.host` against the
-exact provider hostname, strip whatever the client sent, then fetch a
-token from the broker route added above and inject it. Strip *before*
+puts it after `000_policy.py`). **Return immediately if the flow already
+has a response** — `if flow.response is not None: return` — because
+mitmproxy calls every addon's request hook whether or not an earlier one
+has answered, and an addon that skips this fetches a credential and logs
+`cred_injected` for a request the proxy already refused. Then match
+`flow.request.host` against the exact provider hostname, strip whatever
+the client sent, and fetch a token from the broker route added above and
+inject it. Strip *before*
 fetching, and never in the same statement as the injection: the fetch
 raises when the broker is unreachable, and a strip that happens after it
 (or inside the same assignment) does not happen at all — forwarding the

@@ -8,6 +8,61 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.11.2 — 2026-08-16
+
+An audit-trail fix. No boundary change: nothing that was blocked became
+allowed, and nothing that was allowed became blocked.
+
+### Fixed
+
+**An addon no longer acts on a request an earlier addon has already refused.**
+mitmproxy calls every addon's `request` hook whether or not the flow has been
+answered, and nothing checked. Two consequences, both of them the trail
+asserting something that did not happen:
+
+`001_allowlist.py` runs after `000_policy.py` and also denies an internal host
+— no allowlist lists `broker` — so it overwrote the policy addon's response.
+A deployment with an enforcing allowlist recorded `reason=allowlist` for an
+agent probing the credential broker. Those are different events to whoever
+reads the trail, and the more serious one was the one being lost.
+
+Worse, and not in the original report: an **injection** addon after a denial
+also ran. With an allowlist that does not list `api.anthropic.com`:
+
+```json
+{"event":"blocked","reason":"allowlist","host":"api.anthropic.com"}
+{"event":"cred_injected","provider":"anthropic","cred_type":"api_key"}
+```
+
+The broker was called for a credential that was never spent, and the trail
+claims an injection into a request that never left. For a stack whose point is
+that you can see what the agent spent, a trail describing a spend that did not
+happen is the failure that matters.
+
+The fix is `if flow.response is not None: return` as the first line of every
+addon that acts on a request, in `001_allowlist.py`, all four bank entries and
+the `static-key` skeleton. Deliberately dependency-free: deployments vendor
+these files at pins that may predate any shared helper, which is the same
+constraint that shaped the 1.9.2 hostname fix.
+
+`000_policy.py` is exempt. It is the first decision by construction, so it has
+nothing to defer to, and it is the one addon that must never stand aside.
+
+Reported from the [`sal`](https://github.com/lpezet/secure-agent-lab-cli) side
+via the new `stacks` tier, which is what noticed the wrong message (#87).
+
+### Upgrading
+
+**Re-vendor your proxy addons** if you have installed any bank entry. The base
+addons come from the image and need nothing; the provider addons are files your
+deployment owns, so `scripts/check-drift.sh` will report them once you repin.
+
+Until you do, the boundary is unchanged — what you lose is trail accuracy on a
+deployment with an enforcing allowlist, or one whose allowlist denies a host an
+injection addon matches.
+
+---
+
 ## 1.11.1 — 2026-08-15
 
 The shapes this repo ships are now run, not only read. No boundary change.

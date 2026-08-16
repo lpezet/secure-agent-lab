@@ -55,11 +55,15 @@ d=$(mkdep incident)
 cat > "$d/proxy/030_fal.py" <<'PY'
 import audit
 def request(flow):
+    if flow.response is not None:
+        return
     audit.log_event("cred_injected", provider="fal", path=flow.request.path)
 PY
 cat > "$d/proxy/040_telegram.py" <<'PY'
 import audit
 def request(flow):
+    if flow.response is not None:
+        return
     api_method = flow.request.path.split("/")[2]
     audit.log_event("cred_injected", provider="telegram", endpoint=api_method)
 PY
@@ -80,6 +84,8 @@ cat > "$d/proxy/050_custom.py" <<PY
 import audit
 SECRET = "$FAKE_GH"
 def request(flow):
+    if flow.response is not None:
+        return
     if flow.request.pretty_host != "github.com":
         return
     try:
@@ -111,6 +117,8 @@ d=$(mkdep header-selector)
 cat > "$d/proxy/070_selector.py" <<'PY'
 import audit
 def request(flow):
+    if flow.response is not None:
+        return
     if flow.request.host != "api.example.com":
         return
     tier = flow.request.headers.pop("X-Tier", "readonly")
@@ -126,6 +134,8 @@ cat > "$d/proxy/070_strip.py" <<'PY'
 import audit
 PROFILE = "workers-deploy"
 def request(flow):
+    if flow.response is not None:
+        return
     if flow.request.host != "api.example.com":
         return
     flow.request.headers.pop("X-Tier", None)
@@ -150,6 +160,8 @@ cat > "$d/proxy/080_deploy.py" <<'PY'
 import audit
 import hostmatch
 def request(flow):
+    if flow.response is not None:
+        return
     if not hostmatch.matches(flow.request.host, ["*.workers.dev"]):
         return
     flow.request.headers["Authorization"] = "Bearer " + _token()
@@ -164,6 +176,8 @@ cat > "$d/proxy/080_gcp.py" <<'PY'
 import audit
 import hostmatch
 def request(flow):
+    if flow.response is not None:
+        return
     if not hostmatch.matches(flow.request.host, ["*.googleapis.com"]):
         return
     flow.request.headers["Authorization"] = "Bearer " + _token()
@@ -186,6 +200,8 @@ import audit
 import hostmatch
 BLOCKED = ["*.workers.dev", "*.pages.dev"]
 def request(flow):
+    if flow.response is not None:
+        return
     if hostmatch.matches(flow.request.host, BLOCKED):
         flow.response = None
 PY
@@ -204,6 +220,8 @@ cat > "$d/proxy/080_documented.py" <<'PY'
 """Never inject for ["*.workers.dev"] — anyone can register one."""
 import audit
 def request(flow):
+    if flow.response is not None:
+        return
     if flow.request.host != "api.example.com":
         return
     flow.request.headers["Authorization"] = "Bearer " + _token()
@@ -248,7 +266,7 @@ suite "a misordered policy addon is still a failure"
 # renamed copy trips *that* check instead and the suite would pass for the
 # wrong reason. It did, on the first attempt here.
 d=$(mkdep misordered)
-printf 'def request(flow):\n    pass\n' > "$d/proxy/000_aaa.py"
+printf 'def request(flow):\n    if flow.response is not None:\n        return\n    pass\n' > "$d/proxy/000_aaa.py"
 out=$(run "$d")
 check_contains "exits 1" "$out" "EXIT=1"
 check_contains "names what loaded first instead" "$out" "first addon is 000_aaa.py"
