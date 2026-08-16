@@ -914,9 +914,13 @@ done
 # route the manifest declared.
 # ---------------------------------------------------------------------------
 suite "bank gateway snippets expose exactly their declared-exposed routes"
-for m in bank/*/provider.json; do
+for m in bank/*/provider.json template/provider/*/provider.json; do
   [ -f "$m" ] || continue
-  nm=$(jq -r .name "$m"); conf="bank/$nm/cred-gateway/$nm.conf"
+  # Same dirname reasoning as suite E: a skeleton's directory is its shape, not
+  # its .name. The skeleton exposes no route today, so this passes on the
+  # "declares none and ships no .conf" branch — included so the claim in
+  # template/provider/README.md holds for every suite rather than most of them.
+  nm=$(jq -r .name "$m"); conf="$(dirname "$m")/cred-gateway/$nm.conf"
   exposed=$(jq -r '.broker_routes[] | select(.exposed) | .path' "$m" | sort -u)
   if [ -z "$exposed" ]; then
     if [ -f "$conf" ]; then
@@ -995,9 +999,14 @@ done
 # hiding down there would be exactly the silent failure above.
 # ---------------------------------------------------------------------------
 suite "bank entries ship the egress they declare hosts for"
-for m in bank/*/provider.json; do
+for m in bank/*/provider.json template/provider/*/provider.json; do
   [ -f "$m" ] || continue
-  nm=$(jq -r .name "$m"); al="bank/$nm/allowlist"
+  # Path from the manifest's own directory, not from bank/<name>/ — a skeleton's
+  # directory names its shape (static-key) while .name is the placeholder the
+  # author renames (acme), so composing the two finds nothing and reports a
+  # missing file at a path that was never going to exist. Suite B already does
+  # it this way.
+  nm=$(jq -r .name "$m"); al="$(dirname "$m")/allowlist"
   declared=$(jq -r '.hosts[]' "$m" | sort -u)
   if [ -z "$declared" ]; then
     ok "$nm — declares no hosts, so needs no allowlist"

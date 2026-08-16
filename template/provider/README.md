@@ -14,6 +14,14 @@ your own name — file contents and filenames both — and fill in the blanks.
 `PLAYBOOK.md` has the constraints that apply to whatever you write; the
 skeleton is laid out so that following it satisfies them by default.
 
+**`allowlist` is one of the blanks, not an optional extra.** The proxy denies
+every destination the deployment's allowlist does not name, so a broker file
+and an addon are two thirds of an install: without egress, every request your
+provider makes fails while the credential behind it is perfectly good. The
+skeleton's copy carries the reasoning, including why the METHODS column is not
+optional and why deriving the file from the manifest's `hosts` is the specific
+mistake to avoid.
+
 **`acme` is the only thing to replace, and that is deliberate.** The word
 *provider* also appears in these files, and none of those occurrences should
 move: `provider.json` is a fixed filename, `"load_band": "provider"` is a value

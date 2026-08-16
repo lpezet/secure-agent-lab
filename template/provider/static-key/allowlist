@@ -1,0 +1,62 @@
+# Egress this entry needs — rename `api.acme.invalid` along with everything else.
+#
+# This file is copied into the deployment's /etc/agent-allowlist when the entry
+# is installed. It is the allowlist's own syntax, so what you write here is
+# character-for-character what lands there: `domain [METHODS]`, one per line,
+# `#` comments, and *.example.com matching on label boundaries.
+#
+# It exists because your provider does not work without it. The broker file and
+# the addon are only two thirds of an install: the proxy denies every
+# destination the allowlist does not name, so an entry that ships no egress is
+# an entry whose every request fails with a working credential behind it.
+
+api.acme.invalid        GET,POST        # TODO: your host, and the methods it needs
+
+# ---------------------------------------------------------------------------
+# STATE THE METHODS. This is the one line worth reading twice.
+# ---------------------------------------------------------------------------
+# Omitting the column is legal and defaults the entry to GET,HEAD,OPTIONS —
+# safe reads only. So this:
+#
+#     api.acme.invalid
+#
+# is syntactically fine, looks right, and denies every write your provider
+# makes. The symptom is every call failing on a provider you have just
+# installed, which reads as "my credential is wrong" — and it sends you back
+# into the broker file and the addon, which are not where the problem is.
+#
+# Do not derive this file from the manifest's `hosts` for the same reason:
+# `hosts` carries no methods, so copying it produces exactly the line above.
+#
+# Work out the methods from what your client actually sends. Narrower is not
+# safer here — this file governs *reach*, not authority. What bounds a
+# credential is its own scope and the addon's host match, neither of which this
+# file affects. Narrowing below what the client does buys you nothing except a
+# failure that looks like something else.
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — anything the provider works without ships commented out.
+# ---------------------------------------------------------------------------
+# The default is deny, so a commented line is genuinely off, and turning it on
+# is one edit by someone who has just read why they might want it. Put the
+# reason on the line.
+#
+# telemetry.acme.invalid  POST    # usage reporting; the client works without it
+
+# ---------------------------------------------------------------------------
+# This is NOT the manifest's `hosts`, and the difference matters.
+# ---------------------------------------------------------------------------
+# `hosts` is where the addon ATTACHES A CREDENTIAL. This file is where the lab
+# MAY SEND A REQUEST. They overlap, and they are not the same list:
+#
+#   - Every host in `hosts` must appear UNCOMMENTED here, or the addon injects
+#     into requests the proxy denies — a credential minted, audited as issued,
+#     and never spent. 00-config-lint fails on that.
+#   - The reverse does not hold, deliberately. A host may belong here and never
+#     in `hosts`: an error-reporting endpoint, a git remote, anything on a
+#     multi-tenant suffix. Attaching your credential to one of those is the
+#     accident the addon's host matching exists to prevent.
+#
+# See bank/github/allowlist (github.com is here and not in hosts) and
+# bank/cloudflare/allowlist (*.workers.dev is fine to reach, a bug to inject
+# for) for the two cases worth understanding before you write your own.
