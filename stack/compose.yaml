@@ -68,7 +68,10 @@ services:
       - ./proxy/addons:/addons:ro
       - proxy-certs:/home/mitmproxy/.mitmproxy
       - audit-logs:/var/log/audit
-      # Uncomment the line below to enable proxy allowlist
+      # Uncomment the line below to enable proxy allowlist. There is no file
+      # here to uncomment onto: write one, starting from template/deployment/
+      # allowlist for the syntax and from each bank entry's own allowlist file
+      # for the hosts and methods that provider needs.
       # - ./proxy/allowlist:/etc/agent-allowlist:ro
     environment:
       BROKER_URL: http://broker:8080
