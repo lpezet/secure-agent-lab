@@ -8,6 +8,44 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.12.1 — 2026-08-16
+
+The observer dashboard connects on a lab that has not logged anything yet. No
+boundary change.
+
+### Fixed
+
+**`/events` sends its response headers immediately.** `res.writeHead()` puts
+nothing on the wire — Node holds headers until the first `res.write()` or
+`res.end()` — and the SSE handler writes the backlog and nothing else. On a
+deployment that had not yet emitted an audit event the backlog was empty, so
+the response never started: no headers, no body, no error. `EventSource` fired
+neither `onopen` nor `onerror`, and the dashboard sat on its initial
+`connecting…` until something happened to be logged.
+
+It cleared itself the moment anything was, and never recurred on that
+deployment, which is why it survived: the window is exactly the first time an
+operator opens the dashboard on a lab they have just created. For an audit
+trail specifically that is the wrong signal — "no events" and "not receiving
+events" are the two states it exists to distinguish, and it rendered the first
+as the second. Non-browser readers of `/events` were affected the same way,
+since any HTTP client blocks waiting for response headers.
+
+`stack/CLAUDE.md` already documented the intended behaviour ("the SSE
+connection should flip to 'connected' as soon as `/events`' response headers
+land, independent of whether the backlog has anything in it yet"); the code is
+now what that describes.
+
+Reported as [#98](https://github.com/lpezet/secure-agent-lab/issues/98), with
+a standalone repro that needs no deployment.
+
+### Upgrading
+
+**Nothing to do.** Rebuild `observer` to pick it up; a running dashboard that
+already shows events was never affected.
+
+---
+
 ## 1.12.0 — 2026-08-16
 
 The deployment template names no provider. No boundary change — a minor
