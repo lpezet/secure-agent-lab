@@ -98,6 +98,12 @@ const server = http.createServer((req, res) => {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
+    // Node buffers headers until the first write, and an empty backlog writes
+    // nothing — so on a deployment that has not logged yet the client gets no
+    // response at all, not even headers, and the dashboard sits on
+    // "connecting…" forever. "No events" and "not receiving events" are the two
+    // states an audit trail exists to distinguish, so send the headers now.
+    res.flushHeaders();
     for (const event of backlog) res.write(`data: ${JSON.stringify(event)}\n\n`);
     clients.add(res);
     req.on("close", () => clients.delete(res));
