@@ -127,6 +127,40 @@ done <<EOF
 $INV_CRED_PATTERNS
 EOF
 
+suite "every trail writer emits compact JSON"
+# Three services write into one file, so a grep for `"event":"blocked"` has to
+# match all of them. audit.py alone emitted the spaced form until #92 — valid
+# JSON, invisible to any real parser, and it silently halved what a string
+# match found. nginx sets the format because its log_format is hand-written and
+# cannot be argued with; the other two follow it.
+if [ -f stack/proxy/audit.py ]; then
+  if grep -qE 'separators=\("?,"?,[[:space:]]*"?:"?\)' stack/proxy/audit.py; then
+    ok "stack/proxy/audit.py — json.dumps is compact"
+  else
+    ko "stack/proxy/audit.py — json.dumps without compact separators" \
+       "defaults to (', ', ': '), which no other writer uses"
+  fi
+fi
+if [ -f stack/broker/audit.js ]; then
+  # JSON.stringify is compact unless a space argument is passed.
+  if grep -qE 'JSON\.stringify\([^)]*,[^)]*,[^)]*\)' stack/broker/audit.js; then
+    ko "stack/broker/audit.js — JSON.stringify called with an indent argument" \
+       "$(grep -nE 'JSON\.stringify' stack/broker/audit.js)"
+  else
+    ok "stack/broker/audit.js — JSON.stringify is compact"
+  fi
+fi
+if [ -f stack/cred-gateway/nginx.conf ]; then
+  # The log_format literal itself, not the directive line around it.
+  fmt=$(awk '/log_format audit_json/{f=1} f{print} f&&/;[[:space:]]*$/{exit}' stack/cred-gateway/nginx.conf \
+        | grep -oE "'[^']*'" | tr -d "'")
+  if printf '%s' "$fmt" | grep -qE '(": |", )'; then
+    ko "stack/cred-gateway/nginx.conf — audit_json is not compact" "$fmt"
+  else
+    ok "stack/cred-gateway/nginx.conf — audit_json is compact"
+  fi
+fi
+
 suite "audit events reference an exception only via .code or .name"
 # Not the security control. The audit trail is written entirely by whatever
 # provider and addon files a deployment mounts, and this suite cannot see
