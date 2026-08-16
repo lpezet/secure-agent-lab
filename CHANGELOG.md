@@ -8,6 +8,65 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.12.0 — 2026-08-16
+
+The deployment template names no provider. No boundary change — a minor
+because the template's *contract* changed, and anyone consuming it needs to
+know.
+
+### Changed
+
+**`template/deployment/compose.yaml` declares nothing provider-specific.** It
+carried five credential paths on the broker, a Cloudflare profile on two
+services, a GCP service account on the proxy, and five placeholder variables
+on the lab. Every one of them is already declared by
+`bank/<name>/provider.json` under `secrets[]`, `config` or `lab_env` — that
+last field has existed all along, and all four bank entries populate it.
+
+A restated constant is a copy that can stop matching its source, and this one
+**wins**: `environment:` takes precedence over `env_file:`, so a value in the
+template overrides whatever the operator set. The paths agreed, which is what
+made it hard to see — the day a manifest changes a filename, the deployment
+keeps reading the old path while the broker reports the credential as absent.
+Same shape as the vendored-addon hazard 1.10.0 closed.
+
+Two mechanisms replace them. **The proxy loads `.env`**, which is why the file
+named Cloudflare and GCP in the first place: with no `env_file`, `.env` could
+only reach that service through a named pass-through. **The lab loads
+`lab.env`** — deliberately a different file, because that container is the
+untrusted side and `.env` holds the operator's host paths and app ids. Nothing
+in `lab.env` is ever a credential; the values exist so a client library's own
+"am I authenticated?" check passes, and the lint fails on a real one.
+
+`00-config-lint` now derives the forbidden set from `bank/*/provider.json`, so
+a new entry extends the check rather than needing it updated. Examples are
+exempt and stay exempt: an example *is* a specific deployment, and a deployment
+naming its own providers is honest wiring.
+
+Reported from the [`sal`](https://github.com/lpezet/secure-agent-lab-cli) side
+(#95), where this was the last thing standing between that tool and using this
+template verbatim instead of generating a service graph of its own.
+
+### Upgrading
+
+**Only if you adopt the new template file.** An existing deployment keeps its
+own `compose.yaml`; repinning changes which images it builds, not what that
+file says, so nothing breaks by upgrading alone.
+
+If you do adopt it, move each installed entry's variables out of `compose.yaml`
+and into the two env files. `bank/<name>/provider.json` says which go where:
+
+| the manifest says | it goes in |
+|---|---|
+| `secrets[].env` + `secrets[].file` | `.env`, as `VAR=/secrets/<file>` |
+| `config` | `.env` |
+| `lab_env` | `lab.env` |
+
+`lab.env` must exist even if empty — compose refuses to parse a file whose
+`env_file` is missing, including for a service it is not starting.
+
+---
+
 ## 1.11.3 — 2026-08-16
 
 The audit trail is greppable again. No boundary change.

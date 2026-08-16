@@ -379,6 +379,37 @@ for doc in "${DOCS[@]}"; do
   else ko "$doc — dangling relative link(s)" "$bad"; fi
 done
 
+suite "the template names no provider"
+# #95: the template's authority is the wiring. Every provider-specific value —
+# a credential path, a profile, an account id, a lab-side placeholder — is
+# already declared by bank/<name>/provider.json under secrets[], config or
+# lab_env, and a copy here is a copy that can stop matching its source. Worse,
+# `environment:` beats `env_file:`, so a copy here WINS: the day a manifest
+# changes a filename, the deployment keeps reading the old path while the
+# broker reports the credential as absent.
+#
+# Checked against the bank rather than a hardcoded list, so a new entry
+# extends the check for free. Examples are exempt: an example IS a specific
+# deployment, and a deployment naming its own providers is honest wiring.
+TPL_COMPOSE="template/deployment/compose.yaml"
+if [ ! -f "$TPL_COMPOSE" ]; then
+  skip "no template to check" ""
+else
+  bad=""
+  for m in bank/*/provider.json; do
+    [ -f "$m" ] || continue
+    while IFS= read -r var; do
+      [ -n "$var" ] || continue
+      # A bare `VAR:` or `VAR=` in the template's own text, not in prose.
+      hit=$(grep -nE "^[[:space:]]*$var[[:space:]]*[:=]" "$TPL_COMPOSE" || true)
+      [ -n "$hit" ] && bad="${bad}${var} ($(jq -r .name "$m")): ${hit}"$'\n'
+    done < <(jq -r '((.secrets // []) | map(.env)) + ((.config // {}) | keys) + ((.lab_env // {}) | keys) | .[]' "$m")
+  done
+  bad=$(printf '%s' "$bad" | grep -v '^$' || true)
+  if [ -z "$bad" ]; then ok "$TPL_COMPOSE — declares no bank entry's variables"
+  else ko "$TPL_COMPOSE — restates variables a manifest already declares" "$bad"; fi
+fi
+
 suite "the template is pinned, self-consistent and not stale"
 # The template is fetched by tag the way bank/<name>/ is, so the tag inside it
 # has to be the tag it ships at. Three ways that goes wrong: a branch ref, a
@@ -585,8 +616,7 @@ suite "a profile the template declares is a profile .env.example enables"
 # whose loss costs the dashboard rather than the trail, and it is only
 # acceptable while the default actually enables it. Make that a build failure
 # rather than something to remember (#80).
-TPL_COMPOSE="template/deployment/compose.yaml"
-TPL_ENV="template/deployment/.env.example"
+TPL_ENV="template/deployment/.env.example"   # TPL_COMPOSE set above
 if [ ! -f "$TPL_COMPOSE" ] || [ ! -f "$TPL_ENV" ]; then
   skip "no template to check" ""
 elif ! python3 -c 'import yaml' 2>/dev/null; then

@@ -110,7 +110,7 @@ allowlist mounted — because it is the thing people copy, and it is easier to n
 you removed than one you never had.
 
 ```bash
-git clone --depth 1 --branch v1.11.3 \
+git clone --depth 1 --branch v1.12.0 \
   https://github.com/lpezet/secure-agent-lab.git /tmp/sal
 cp -r /tmp/sal/template/deployment ./my-deployment && cd ./my-deployment
 cp .env.example .env && $EDITOR .env
