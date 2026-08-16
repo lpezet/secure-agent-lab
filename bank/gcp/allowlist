@@ -1,0 +1,32 @@
+# GCP — egress this entry needs.
+#
+# Allowlist syntax, so what you read here is what lands in the deployment's
+# /etc/agent-allowlist. Uncommented lines are what the provider needs to work;
+# anything below the OPTIONAL marker is off until you turn it on.
+#
+# METHODS is not optional in practice. Omitting it defaults the entry to
+# GET,HEAD,OPTIONS, which denies every write and — see below — the token
+# exchange every Google client library performs before its first call.
+
+*.googleapis.com        GET,POST,PUT,PATCH,DELETE
+sts.googleapis.com      POST
+oauth2.googleapis.com   POST
+
+# The last two lines are not redundant, in either direction.
+#
+# They are narrower on purpose: hostmatch.find() resolves exact before wildcard
+# regardless of line order, so these two hosts get POST only while the rest of
+# the googleapis surface keeps the full set.
+#
+# And they must be present at all, which is the non-obvious part. 040_gcp.py
+# answers the token exchange at these two hosts locally, with the inert
+# `proxy-injected` value, so nothing ever reaches Google — but 001_allowlist.py
+# runs FIRST (001 before 040). A destination the allowlist denies never gets as
+# far as the addon that would have answered it, so leaving these out breaks the
+# credential chain of every Google client library, before any real API call.
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# *.googleusercontent.com   GET     # signed-URL downloads some APIs redirect to
+# accounts.google.com       *       # interactive sign-in; a lab should not need it

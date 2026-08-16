@@ -1,0 +1,24 @@
+# Cloudflare — egress this entry needs.
+#
+# Allowlist syntax, so what you read here is what lands in the deployment's
+# /etc/agent-allowlist. Uncommented lines are what the provider needs to work;
+# anything below the OPTIONAL marker is off until you turn it on.
+#
+# METHODS is not optional in practice. Omitting it defaults the entry to
+# GET,HEAD,OPTIONS, and a wrangler deploy is a PUT — so a bare
+# `api.cloudflare.com` line blocks deployment while looking right.
+
+api.cloudflare.com      GET,POST,PUT,PATCH,DELETE
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# *.workers.dev           GET,POST    # reach your own deployed Worker to test it
+#
+# That line is the sharpest illustration in the bank of why this file is not
+# `hosts`. `*.workers.dev` is fine to make REACHABLE — the worst case is the
+# agent talking to a stranger's Worker with no credential attached. It would be
+# a serious bug in `hosts`, because anyone can register a workers.dev name and
+# an injection match there hands them a live Cloudflare token. The repo enforces
+# that asymmetry: `injection_wildcard_multitenant` in scripts/lib/invariants.sh
+# fails on exactly this suffix, and only for addons that attach a credential.

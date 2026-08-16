@@ -7,7 +7,13 @@
 # This file being present is what makes the allowlist enforcing. Delete it and
 # every destination is permitted, with a warning at startup.
 #
-# Nothing is allowed by default. Add what your agent actually needs:
+# Nothing is allowed by default. Add what your agent actually needs. If you
+# installed a provider from the bank, copy the uncommented lines out of that
+# entry's own `allowlist` file rather than writing them from its `hosts` —
+# `hosts` carries no methods, and an entry with none defaults to the
+# safe-reads-only set above, which denies every write the provider makes.
+#
+# Examples:
 # api.github.com          GET,POST,PATCH,PUT,DELETE
 # uploads.github.com      POST
 # github.com              *

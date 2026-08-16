@@ -1,0 +1,30 @@
+# Anthropic — egress this entry needs.
+#
+# Allowlist syntax, so what you read here is what lands in the deployment's
+# /etc/agent-allowlist. Uncommented lines are what the provider needs to work;
+# anything below the OPTIONAL marker is off until you turn it on.
+#
+# METHODS is not optional in practice. Omitting it defaults the entry to
+# GET,HEAD,OPTIONS, and every request Claude Code makes is a POST — so a bare
+# `api.anthropic.com` line blocks the provider completely while looking right.
+
+api.anthropic.com       GET,POST
+
+# GET is here for model listing (GET /v1/models), which some clients call at
+# startup; POST carries /v1/messages and /v1/messages/count_tokens. Narrowing
+# to POST alone is safe for Claude Code itself and is the tighter choice if you
+# know your client never lists models. Widening past these two is not needed by
+# anything: the Admin API under /v1/organizations is refused by the addon
+# regardless of what this file says.
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# statsig.anthropic.com   POST    # feature flags; the client works without it
+# sentry.io               POST    # error reporting
+#
+# Note what these are NOT: they belong in an allowlist and must never appear in
+# the entry's `hosts`. `hosts` is where the addon attaches the Anthropic
+# credential, and attaching it to a Sentry request is exactly the accident the
+# addon's host matching exists to prevent. Reachable and credentialed are two
+# different lists that happen to overlap.

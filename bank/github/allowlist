@@ -1,0 +1,29 @@
+# GitHub — egress this entry needs.
+#
+# Allowlist syntax, so what you read here is what lands in the deployment's
+# /etc/agent-allowlist. Uncommented lines are what the provider needs to work;
+# anything below the OPTIONAL marker is off until you turn it on.
+#
+# METHODS is not optional in practice. Omitting it defaults the entry to
+# GET,HEAD,OPTIONS, so a bare `api.github.com` line leaves every `gh` write
+# denied while looking right.
+
+api.github.com          GET,POST,PATCH,PUT,DELETE
+uploads.github.com      POST
+github.com              *
+
+# github.com is here and is NOT in the entry's `hosts`, which is the clearest
+# case in the bank of those being two different lists. This entry ships a git
+# credential helper (lab/setup-github.sh), so git push/pull over HTTPS is part
+# of what installing it gives you — and that traffic must be able to leave.
+# What it must never do is go through 010_github.py: git runs its own Basic-auth
+# handshake inside the tunnel, which an injected Authorization header breaks.
+# So: reachable, deliberately not credentialed. `*` because git fetch is GET and
+# git push is POST to the same host.
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — nothing below is needed for the provider to work.
+# ---------------------------------------------------------------------------
+# codeload.github.com             GET     # tarball/zipball downloads, `gh repo archive`
+# objects.githubusercontent.com   GET     # release assets and git-LFS objects
+# raw.githubusercontent.com       GET     # raw file fetches outside the API
