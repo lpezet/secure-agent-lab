@@ -643,6 +643,12 @@ A bank entry ships an `allowlist` file — the hosts it needs, in the allowlist'
 own syntax. This is how you work out what goes in it, whether you are writing a
 new entry or auditing one you installed.
 
+If you are writing one, start from
+[`template/provider/static-key/allowlist`](template/provider/static-key/allowlist)
+rather than from a blank file: it carries this section's rules as comments
+around a single placeholder line, so what you delete on the way out is what you
+have decided you do not need.
+
 **Start from what the tooling actually issues, not from what feels safe.** The
 allowlist governs *reach*, not authority. Narrowing it below what the provider's
 client does buys nothing — the thing that bounds what a credential can do is the
