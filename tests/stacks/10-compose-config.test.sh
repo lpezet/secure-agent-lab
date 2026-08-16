@@ -104,6 +104,9 @@ for dir in template/deployment examples/claude-code examples/dev-container/.devc
   # strings and never reads them. Copying the directory would drag in an
   # example's gitignored workspace/, which holds root-owned runtime state.
   d=$(mktemp -d); cp "$dir/compose.yaml" "$d/"
+  # lab.env too: compose refuses to parse a file whose env_file is missing,
+  # even for a service this suite never starts.
+  cp "$dir/lab.env" "$d/" 2>/dev/null || true
   cp "$dir/.env.example" "$d/.env" 2>/dev/null || printf '' > "$d/.env"
   if out=$( (cd "$d" && docker compose config 2>&1 >/dev/null) ) && [ -z "$out" ]; then
     ok "$dir — resolves"
