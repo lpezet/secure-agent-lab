@@ -35,7 +35,7 @@
       "type": "array",
       "minItems": 1,
       "items": { "type": "string", "minLength": 1 },
-      "description": "Exact hostnames the proxy addon matches. Load-bearing: seeds 001_allowlist.py, and is cross-checked against the quoted hostname literals in the addon."
+      "description": "Hostnames the proxy addon INJECTS A CREDENTIAL for. Cross-checked against the quoted hostname literals in the addon, both directions. Not the entry's egress: that is bank/<name>/allowlist, in the allowlist's own syntax, and it is deliberately the wider list — a host may need to be reachable while never being a place a credential is attached (sentry.io, github.com, *.workers.dev). Every host here must appear uncommented there, or the addon injects into requests the proxy denies; the reverse does not hold and must not be made to. A wildcard is safe here only when one party holds every name under the suffix."
     },
     "secrets": {
       "type": "array",

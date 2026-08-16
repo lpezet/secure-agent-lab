@@ -619,8 +619,12 @@ Copy the files, do not retype them. `<name>` is a directory under
    bug, and `tests/integration/00-config-lint.test.sh` fails on one.
 7. **Lab setup**: if the entry has `lab_setup`, copy it into your `lab/` and
    make sure your `setup.sh` runs it.
-8. **Allowlist**: append the entry's `hosts` to `/etc/agent-allowlist` if you
-   use one.
+8. **Allowlist**: if you mount one, append the uncommented lines of the entry's
+   `bank/<name>/allowlist` to it. Copy the lines as they are — do **not** derive
+   them from `hosts`, which carries no methods, so an entry built that way
+   defaults to `GET,HEAD,OPTIONS` and denies every write the provider makes.
+   Read the commented lines while you are there: they are the optional hosts,
+   denied until you uncomment them, each with the reason you might want it.
 9. **Restart, then verify**:
    ```bash
    docker compose up -d --force-recreate broker proxy cred-gateway
@@ -632,6 +636,53 @@ files written — so `check-drift.sh` compares exactly those entries rather than
 falling back to guessing which example you started from. Without it, drift
 still resolves by filename, which works but degrades on a deployment carrying
 many custom files.
+
+### Working out an entry's egress
+
+A bank entry ships an `allowlist` file — the hosts it needs, in the allowlist's
+own syntax. This is how you work out what goes in it, whether you are writing a
+new entry or auditing one you installed.
+
+**Start from what the tooling actually issues, not from what feels safe.** The
+allowlist governs *reach*, not authority. Narrowing it below what the provider's
+client does buys nothing — the thing that bounds what a credential can do is the
+credential's own scope and the addon's host match, both of which are enforced
+elsewhere and neither of which this file affects. What narrowing does buy you is
+a silent failure, so the minimum is "the methods the client sends", not "the
+fewest methods I can imagine it needing".
+
+**Always state METHODS.** Omitting the column defaults the entry to
+`GET,HEAD,OPTIONS`, which is a real default and rarely the right one. This is
+the failure worth naming, because it does not look like one:
+
+```
+api.anthropic.com
+```
+
+That line is syntactically fine, reads as correct, and blocks every request
+Claude Code makes, all of which are POSTs. The symptom — every call failing on a
+freshly installed provider — reads as "the credential is wrong", and the
+credential is fine.
+
+**Three things belong in the allowlist that are not in `hosts`:**
+
+- Hosts the agent must reach but must never be credentialed — `github.com` for
+  git push/pull, which `010_github.py` deliberately does not match.
+- Hosts an addon answers locally. `040_gcp.py` answers the token exchange at
+  `sts.googleapis.com` itself, but `001_allowlist.py` runs first: a destination
+  the allowlist denies never reaches the addon that would have answered it.
+- Multi-tenant suffixes that are fine to reach and unsafe to inject for —
+  `*.workers.dev`. Reachable and credentialed are different lists, and this is
+  the direction where conflating them is dangerous.
+
+**Ship optional hosts commented out**, with the reason on the line. Telemetry,
+error reporting, CDN mirrors, anything the provider works without. The default
+is deny, so a commented line is genuinely off, and turning it on is one edit by
+someone who has just read why they might want to.
+
+Then check yourself the way the lint does: every host in `hosts` appears
+uncommented in the allowlist. A host the addon injects into but the lab cannot
+reach is a credential that is minted, audited as issued, and never spent.
 
 ### A custom provider
 

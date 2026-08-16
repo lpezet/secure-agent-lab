@@ -841,6 +841,13 @@ else
     jq -e '.broker_routes[] | select(.exposed)' "$man" >/dev/null 2>&1 \
       && implied="$implied cred-gateway/$mname.conf"
     ls=$(jq -r '.lab_setup // ""' "$man"); [ -n "$ls" ] && implied="$implied $ls"
+    # `allowlist` is named by the convention rather than by the manifest — the
+    # entry's egress is a file, not a field, because a field means bumping
+    # schema_version (additionalProperties: false) for something a file does
+    # better. It is not in $implied because it is required at a different
+    # condition: suite E asks for it whenever the entry declares hosts. Here it
+    # only needs to not read as a stray.
+    allowed="$implied allowlist"
 
     for rel in $implied; do
       if [ -f "$entry/$rel" ]; then ok "$entry/$rel exists"
@@ -848,7 +855,7 @@ else
     done
     while IFS= read -r actual; do
       rel="${actual#$entry/}"
-      if printf '%s\n' $implied | grep -qx "$rel"; then ok "$entry/$rel is implied by the manifest"
+      if printf '%s\n' $allowed | grep -qx "$rel"; then ok "$entry/$rel is implied by the manifest"
       else ko "$entry/$rel is not implied by the manifest" "stray file in a bank entry"; fi
     done < <(find "$entry" -type f | sort)
   done
@@ -966,6 +973,76 @@ for dir in examples/claude-code examples/dev-container/.devcontainer; do
       fi
     done
   done
+done
+
+# ---------------------------------------------------------------------------
+# Suite E — an entry ships the egress it needs, and it covers its own hosts.
+#
+# The third hosts↔X cross-check, after suite B (addon) and suite C (gateway).
+# The failure it exists to catch is silent in a way the other two are not: an
+# installed entry whose hosts the deployment's allowlist does not carry injects
+# a credential into requests that never leave, so the symptom is a provider
+# that does not work and an audit trail that says the credential was issued.
+# Read as "the credential is wrong", which it is not.
+#
+# The reverse direction is deliberately NOT checked. An allowlist may name hosts
+# the addon must never touch — sentry.io, github.com, *.workers.dev — because
+# reachable and credentialed are different lists. Requiring allowlist ⊆ hosts
+# would make the dangerous direction the tidy one.
+#
+# "Uncommented" is the whole point of the commented OPTIONAL section: a host
+# that ships commented out is denied until someone turns it on, so a hosts entry
+# hiding down there would be exactly the silent failure above.
+# ---------------------------------------------------------------------------
+suite "bank entries ship the egress they declare hosts for"
+for m in bank/*/provider.json; do
+  [ -f "$m" ] || continue
+  nm=$(jq -r .name "$m"); al="bank/$nm/allowlist"
+  declared=$(jq -r '.hosts[]' "$m" | sort -u)
+  if [ -z "$declared" ]; then
+    ok "$nm — declares no hosts, so needs no allowlist"
+    continue
+  fi
+  if [ ! -f "$al" ]; then
+    ko "$nm — declares hosts but ships no allowlist" \
+       "expected $al; installing this entry gives a lab that cannot reach it"
+    continue
+  fi
+  # Same parse as 001_allowlist.py: a full-line # is a comment, and a trailing
+  # # is stripped before the domain/methods split. Reproduced rather than
+  # shared because the addon is Python in an image and this is bash.
+  present=$(awk '
+    { line = $0
+      sub(/[[:space:]]*#.*$/, "", line)
+      if (line ~ /^[[:space:]]*$/) next
+      n = split(line, f, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) if (f[i] != "") { print tolower(f[i]); break }
+    }' "$al" | sort -u)
+  missing=$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$present"))
+  if [ -z "$missing" ]; then
+    ok "$al — every declared host is reachable ($(echo $declared))"
+  else
+    ko "$al — declares a host it does not allow" \
+       "in .hosts but not uncommented in the allowlist: $missing"
+  fi
+  # A methods column is not syntactically required, and omitting it is the
+  # failure mode this whole file exists for: the default is GET,HEAD,OPTIONS,
+  # so a bare line looks correct and denies every write.
+  bare=$(awk '
+    { line = $0
+      sub(/[[:space:]]*#.*$/, "", line)
+      if (line ~ /^[[:space:]]*$/) next
+      n = split(line, f, /[[:space:]]+/)
+      c = 0; first = ""
+      for (i = 1; i <= n; i++) if (f[i] != "") { c++; if (first == "") first = f[i] }
+      if (c < 2) print first
+    }' "$al")
+  if [ -z "$bare" ]; then
+    ok "$al — every entry states its methods"
+  else
+    ko "$al — entry with no METHODS column" \
+       "defaults to GET,HEAD,OPTIONS, which is rarely what a provider needs: $bare"
+  fi
 done
 
 finish

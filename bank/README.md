@@ -50,6 +50,7 @@ bank/
     proxy/<name>.py                injection addon — no numeric prefix, see below
     cred-gateway/<name>.conf       whitelist snippet, only if lab must hold it
     lab/setup.sh                   optional fragment, sourced by the deployment
+    allowlist                      the egress the entry needs, in allowlist syntax
 ```
 
 - One directory per provider, named exactly `name` in its manifest.
@@ -82,6 +83,14 @@ bank/
 - **`hosts` must agree with the addon, exactly.** Every host in the manifest
   appears as a quoted literal in the addon, and every quoted hostname literal in
   the addon appears in the manifest. Checked both directions.
+- **An entry ships the egress it needs, as `allowlist`.** Without it, installing
+  an entry produces a lab that cannot use it: the entry brings its provider, its
+  addon and its wiring, and then every request is denied, because the
+  deployment's allowlist is the operator's and nothing seeds it. Every host in
+  `hosts` must appear **uncommented** there — a host the addon injects into but
+  the lab cannot reach is a credential that is never spent, and that is silent.
+  Optional hosts ship commented out; the default is deny, so a line is on or it
+  is off, and the reason sits next to the host.
 - **No numeric prefix on `proxy/<name>.py`.** The manifest declares a
   `load_band`; the installer assigns the lowest free slot in it. Baking a number
   in would make two providers wanting `030` the user's problem.
@@ -125,6 +134,37 @@ off.
 imports. It is the one failure that is silent at install and fatal at runtime —
 `MODULE_NOT_FOUND` on `require("../audit")` — so an installer checks it first.
 
+### Why egress is a file and not a field
+
+`allowlist` sits beside `provider.json` rather than inside it, and that is the
+deliberate choice rather than the lazy one.
+
+The schema is `additionalProperties: false`, and a conforming installer
+implements that strictly — so **any** new field makes every older installer
+refuse every manifest, which is a `schema_version` bump. That number should move
+on the order of never, and "the entry knows its own egress" is not what to spend
+it on. An entry is already a directory of files, and the directory is not
+governed by that rule: an older installer simply does not copy the file and
+behaves exactly as it did before.
+
+Three things the file gets that a field would not:
+
+- **Comments, which is how an optional host expresses itself.** No
+  `required: true|false` to design and no precedence rules to write down — the
+  default is deny, so a line is on or it is commented out, and the reason it
+  might be wanted sits next to it.
+- **One syntax.** What a reviewer reads in the bank is character-for-character
+  what lands in the deployment's `/etc/agent-allowlist`.
+- **Nothing to version.**
+
+And it must not be folded into `hosts`, which is the same objection from the
+other end. They are different lists that merely overlap: `hosts` is where the
+addon **attaches a credential**, the allowlist is where the lab **may send a
+request**. `sentry.io` belongs in the second and must never appear in the first.
+Keeping them apart is what makes that un-writable rather than merely
+discouraged — see `bank/cloudflare/allowlist`, where `*.workers.dev` is a
+reasonable thing to make reachable and a serious bug to inject for.
+
 ## How this is enforced
 
 `tests/integration/00-config-lint.test.sh` carries the checks. Two things to
@@ -147,10 +187,14 @@ suites `skip` rather than fail, and the rest of the lint still runs.
 1. Write `bank/<name>/provider.json` against the schema.
 2. Add the files it implies, following the rules above. Start from the closest
    existing entry as a template — that is what they are for.
-3. `tests/run.sh`. Suites A–D cover the manifest, the host agreement, the route
-   exposure, and whether the examples still match the bank.
-4. Anything the entry needs that the manifest cannot express is a bug in the
-   schema, not a note for the playbook.
+3. Write `bank/<name>/allowlist` — the hosts the entry must reach, with their
+   methods. Work out the minimum the way [`PLAYBOOK.md`](../PLAYBOOK.md#working-out-an-entrys-egress)
+   describes; optional hosts ship commented out.
+4. `tests/run.sh`. Suites A–E cover the manifest, the host agreement, the route
+   exposure, whether the examples still match the bank, and whether the entry
+   can actually reach what it injects for.
+5. Anything the entry needs that neither the manifest nor the conventional
+   files can express is a bug in the schema, not a note for the playbook.
 
 Writing a provider the bank does *not* have is a different job, and the
 generation constraints for it stay in [`PLAYBOOK.md`](../PLAYBOOK.md). Those
