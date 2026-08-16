@@ -338,4 +338,51 @@ fi
 rm -f "/tmp/$ECHO_CONF" "/tmp/$BROKER_CONF"
 rm -rf "/tmp/$RUN_ID"-*-addons
 
+# --------------------------------------------------------------- #87
+#
+# mitmproxy calls every addon's request hook whether or not the flow has
+# already been answered. Before the guard, an injection addon running after a
+# denial fetched a credential from the broker and logged cred_injected for a
+# request that never left — the audit trail claiming a credential was spent on
+# a request the proxy refused.
+#
+# The allowlist is the addon that denies here, since it is the one that can
+# refuse a host an injection addon also matches.
+suite "an injection addon stands aside once a request has been refused"
+GUARD_DIR="/tmp/$RUN_ID-guard-addons"
+mkdir -p "$GUARD_DIR"
+cp stack/proxy/addons/000_policy.py stack/proxy/addons/001_allowlist.py "$GUARD_DIR/"
+cp bank/anthropic/proxy/anthropic.py "$GUARD_DIR/020_anthropic.py"
+# An enforcing allowlist that does NOT list api.anthropic.com.
+printf 'readonly-api\n' > "/tmp/$RUN_ID-guard-allowlist"
+
+PXG="$RUN_ID-guard"
+docker run -d --name "$PXG" --network "$NET" \
+  -v "$GUARD_DIR:/addons:ro" \
+  -v "/tmp/$RUN_ID-guard-allowlist:/etc/agent-allowlist:ro" \
+  -e BROKER_URL=http://broker:8080 -e PYTHONUNBUFFERED=1 \
+  -e AUDIT_LOG=/tmp/audit.jsonl "$IMG" >/dev/null
+track_container "$PXG"
+
+guard_ready=false
+for _ in $(seq 1 60); do
+  code=$(http_code "http://readonly-api:8080/ping" --proxy "http://$PXG:8080")
+  [ -n "$code" ] && [ "$code" != "000" ] && { guard_ready=true; break; }
+  sleep 0.5
+done
+
+if [ "$guard_ready" != true ]; then
+  ko "guard proxy did not start" "$(docker logs "$PXG" 2>&1 | tail -20)"
+else
+  check "an unlisted host is refused" "403" \
+    "$(http_code "http://api.anthropic.com/v1/messages" -X POST --proxy "http://$PXG:8080")"
+  trail=$(docker exec "$PXG" cat /tmp/audit.jsonl 2>/dev/null)
+  # Matched without the key, because the two audit writers disagree on spacing:
+  # audit.js emits compact JSON and audit.py does not, so `"event":"blocked"`
+  # and `"event": "blocked"` both occur in a real trail. A check written for
+  # one silently misses the other.
+  check_contains "the denial is recorded" "$trail" '"blocked"'
+  check_not_contains "and no credential injection is claimed" "$trail" "cred_injected"
+fi
+
 finish
