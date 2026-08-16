@@ -377,11 +377,7 @@ else
   check "an unlisted host is refused" "403" \
     "$(http_code "http://api.anthropic.com/v1/messages" -X POST --proxy "http://$PXG:8080")"
   trail=$(docker exec "$PXG" cat /tmp/audit.jsonl 2>/dev/null)
-  # Matched without the key, because the two audit writers disagree on spacing:
-  # audit.js emits compact JSON and audit.py does not, so `"event":"blocked"`
-  # and `"event": "blocked"` both occur in a real trail. A check written for
-  # one silently misses the other.
-  check_contains "the denial is recorded" "$trail" '"blocked"'
+  check_contains "the denial is recorded" "$trail" '"event":"blocked"'
   check_not_contains "and no credential injection is claimed" "$trail" "cred_injected"
 fi
 

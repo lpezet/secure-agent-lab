@@ -99,6 +99,8 @@ Route handlers live in `stack/broker/providers/` — one file per credential pro
 
 The broker makes direct outbound HTTPS calls to `api.github.com` and `api.cloudflare.com` — it does **not** go through the proxy. Routing through the proxy would be circular (proxy fetches creds from broker to authenticate outbound calls).
 
+**All three trail writers emit compact JSON** — `audit.js` via `JSON.stringify`, `audit.py` via explicit `separators=(",", ":")`, and cred-gateway's hand-written `log_format audit_json`. They share one file, so a `grep` for `"event":"blocked"` must match every service's lines; `audit.py` alone emitted the spaced form until #92, and a check written for one writer silently missed the others. Timestamps are likewise `+00:00` with no milliseconds, matching nginx's `$time_iso8601`, which is the writer with no say in the matter. See `PLAYBOOK.md`'s *What a trail line is*.
+
 `stack/broker/audit.js`, baked into the image alongside `server.js`, is a JSONL writer any provider can use: `require("../audit").logEvent("token_issued", { provider: "github" })`. It writes to `AUDIT_LOG` if set and is a silent no-op otherwise, so providers that call it keep working in deployments that have not wired up the `audit-logs` volume. Log the shape of what happened, never a credential value.
 
 ### proxy (`stack/proxy/`)

@@ -87,9 +87,26 @@ up() {
   PROJECTS+=("$dir")
   # stderr, not stdout: this function's stdout is the project directory.
   printf '  building and starting %s (from its pinned tag — minutes on a cold cache)\n' "$name" >&2
-  if ! (cd "$dir" && docker compose up -d --wait "${SERVICES[@]}" >/dev/null 2>&1); then
+  # `up -d` then poll, rather than `up -d --wait`. --wait obeys each service's
+  # own healthcheck budget, and those are the SHIPPED ones — the broker allows
+  # 30s (5s start_period, 5 retries at 5s). That is generous for one stack on
+  # an idle machine and tight for the third stack on a loaded CI box, which
+  # made this flake. Widening the healthchecks would change the artefact under
+  # test to suit the test; polling here does not.
+  if ! (cd "$dir" && docker compose up -d "${SERVICES[@]}" >/dev/null 2>&1); then
     return 1
   fi
+  local i states
+  for i in $(seq 1 90); do   # 180s
+    states=$(cd "$dir" && docker compose ps --format '{{.Service}}:{{.Health}}' 2>/dev/null)
+    # Every named service reporting healthy, and none reporting otherwise.
+    if [ "$(printf '%s\n' "$states" | grep -c ':healthy$')" = "${#SERVICES[@]}" ]; then
+      break
+    fi
+    case "$states" in *:unhealthy*) return 1 ;; esac
+    sleep 2
+  done
+  [ "$(printf '%s\n' "$states" | grep -c ':healthy$')" = "${#SERVICES[@]}" ] || return 1
   printf '%s' "$dir"
 }
 
@@ -170,18 +187,17 @@ check_shape() { # check_shape <label> <src-dir>
   # body holding no token, so a check written only against those would pass
   # while the block was gone. Assert the refusal came from the PROXY.
   #
-  # Either proxy refusal counts. Both addons deny an internal host and
-  # 001_allowlist.py runs second, so on a shape whose allowlist is enforcing —
-  # the template, which ships the file with no entries — its message overwrites
-  # the policy addon's. The block is not weaker for that: the allowlist only
-  # sets a response when it denies, so when it permits a host the policy 403
-  # stands. What changes is which reason the audit trail records.
+  # It must be the POLICY addon that refused, not merely some 403.
+  #
+  # Until 1.11.2 this accepted either message, because on a shape with an
+  # enforcing allowlist 001_allowlist.py ran second and overwrote the policy
+  # response (#87). That is fixed, every shape pins past it, and leaving the
+  # check permissive would mean a regression of #87 passed here in silence —
+  # which is the failure mode this repo keeps finding in itself.
   refusal=$(probe_body "$proj" --proxy "http://proxy:8080" "http://broker:8080/github/token")
-  case "$refusal" in
-    *"internal host blocked"*)         ok "$label — refused by the policy addon" ;;
-    *"blocked by allowlist policy"*)   ok "$label — refused by the allowlist addon (enforcing, denies broker too)" ;;
-    *) ko "$label — the refusal did not come from the proxy" "$refusal" ;;
-  esac
+  check_contains "$label — refused by the policy addon, specifically" \
+    "$refusal" "internal host blocked"
+
   # The two bypasses that shipped and were fixed: a spoofed Host header (1.6.0)
   # and an uppercased hostname (1.9.2).
   check "a spoofed Host does not bypass it" "403" \

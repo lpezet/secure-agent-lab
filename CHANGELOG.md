@@ -8,6 +8,47 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.11.3 — 2026-08-16
+
+The audit trail is greppable again. No boundary change.
+
+### Fixed
+
+**`audit.py` now emits compact JSON, like the other two writers.** Three
+services write the trail into one file, and two agreed on formatting:
+`audit.js` uses `JSON.stringify` and cred-gateway's `log_format` is
+hand-written, both compact. `audit.py` used `json.dumps` with its default
+separators, so it alone emitted `"event": "blocked"` where the others emitted
+`"event":"blocked"`.
+
+Both are valid JSON and `observer` parses per line, so nothing was broken. But
+a `grep` written against one service's lines returned nothing for the others —
+which reads as an absence of events rather than a formatting difference, and
+cost time three separate times here.
+
+`audit.py` is the one that moved because it is the minority of three, and
+because the precedent was already set: both writers' *timestamp* comments say
+they match cred-gateway's nginx `$time_iso8601` rather than their language's
+default. nginx sets the format, being the writer that cannot be argued with.
+
+### Added
+
+**`PLAYBOOK.md` now says what a trail line is** — one compact JSON object per
+line, `ts` / `service` / `event` first, `%Y-%m-%dT%H:%M:%S+00:00` with no
+milliseconds. Nothing stated this anywhere before, which is how three writers
+came to agree only by coincidence. `00-config-lint` asserts all three are
+compact, so a fourth writer that drifts fails rather than being noticed later.
+
+### Upgrading
+
+**Nothing to do**, but check any tooling of your own that string-matches the
+trail. A filter written for the proxy's old spaced form — `"event": "blocked"`
+— stops matching; one written for the broker's or cred-gateway's compact form
+now matches everything. Anything using a real JSON parser is unaffected either
+way.
+
+---
+
 ## 1.11.2 — 2026-08-16
 
 An audit-trail fix. No boundary change: nothing that was blocked became
