@@ -69,6 +69,9 @@ up() {
   local dir="$WORK/$name"
   mkdir -p "$dir"
   cp "$src/compose.yaml" "$dir/"
+  # compose refuses to parse a file whose env_file is missing, even for the
+  # lab service this suite deliberately never starts.
+  cp "$src/lab.env" "$dir/" 2>/dev/null || true
   cp "$src/.env.example" "$dir/.env" 2>/dev/null || printf '' > "$dir/.env"
   # The three mount points, plus the allowlist data file, because the boundary
   # is partly made of what they contain — an unmounted cred-gateway/ would 403

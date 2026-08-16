@@ -22,8 +22,24 @@ cp /tmp/sal/bank/github/proxy/*.py           proxy/
 cp /tmp/sal/bank/github/cred-gateway/*.conf  cred-gateway/
 ```
 
-then set that provider's variables in `.env` and put its credential file in
-`~/.config/agent-creds/`. `bank/<name>/provider.json` lists both.
+then set that entry's variables — `bank/<name>/provider.json` declares all of
+them, and each goes in exactly one place:
+
+| the manifest says | it goes in |
+|---|---|
+| `secrets[].env` + `secrets[].file` | `.env`, as `VAR=/secrets/<file>` |
+| `config` | `.env` |
+| `lab_env` | `lab.env` |
+| `secrets[].file` | the file itself, in `~/.config/agent-creds/` |
+
+**`compose.yaml` is never edited.** Nothing provider-specific is in it, which
+is what lets a tool fetch this directory at a tag and use it verbatim —
+and what stops a copied value silently overriding yours, since `environment:`
+in a compose file beats `env_file:`.
+
+`lab.env` is separate from `.env` because the lab container is the untrusted
+side: `.env` holds your settings, including host paths and app ids, and the
+agent has no reason to see them.
 
 ## What this is authoritative for
 
