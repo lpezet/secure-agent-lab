@@ -27,13 +27,27 @@ require_docker
 SERVICES=(broker proxy cred-gateway)
 
 WORK=$(mktemp -d)
-PROJECTS=()
 teardown() {
-  for p in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
-    [ "${KEEP_STACK:-0}" = "1" ] && continue
-    (cd "$p" && docker compose down -v --remove-orphans >/dev/null 2>&1)
-  done
-  rm -rf "$WORK"
+  # Derived from $WORK rather than from a list `up` appends to. `up` prints the
+  # project directory on stdout, so every caller invokes it as `$(up ...)` — a
+  # command substitution, which is a subshell, so an array appended to inside it
+  # never reaches this function. That is not a hypothetical: this suite shipped
+  # `PROJECTS+=("$dir")` inside `up`, the array was empty here on every run, and
+  # `docker compose down -v` never ran once. Nothing under $WORK is anything but
+  # a project this suite created, so the filesystem is the more honest list.
+  if [ "${KEEP_STACK:-0}" != "1" ]; then
+    for p in "$WORK"/*/; do
+      [ -f "$p/compose.yaml" ] || continue
+      (cd "$p" && docker compose down -v --remove-orphans >/dev/null 2>&1)
+    done
+    rm -rf "$WORK"
+  else
+    # KEEP_STACK is for poking at the running stacks afterwards, which needs
+    # their compose files to still exist — `docker compose logs` against a
+    # deleted project directory is not a thing. The old code skipped the
+    # teardown and deleted $WORK anyway.
+    printf '  KEEP_STACK=1 — stacks left up, project files in %s\n' "$WORK"
+  fi
   cleanup
 }
 # INT and TERM as well as EXIT: an interrupted run that skips teardown leaves
@@ -56,6 +70,16 @@ sweep_stale() {
   for n in $(docker network ls --format '{{.Name}}' 2>/dev/null | grep '^sattest-' || true); do
     case "$n" in *"$mine"*) continue ;; esac
     docker network rm "$n" >/dev/null 2>&1
+  done
+  # Volumes too. Containers and networks were swept and volumes were not, so a
+  # run that died without teardown leaked its volumes permanently — one machine
+  # here had 111 of them from 28 runs. They are small (near-empty audit logs and
+  # a CA cert), so this never showed up as disk pressure; it just grew forever.
+  # `docker volume rm` refuses a volume still in use, which is the backstop
+  # against removing one belonging to a run in progress.
+  for v in $(docker volume ls --format '{{.Name}}' 2>/dev/null | grep '^sattest-' || true); do
+    case "$v" in *"$mine"*) continue ;; esac
+    docker volume rm "$v" >/dev/null 2>&1
   done
 }
 sweep_stale
@@ -87,7 +111,6 @@ up() {
   # A project name per shape, so two of these never collide with each other or
   # with a real stack the developer has running.
   printf 'COMPOSE_PROJECT_NAME=%s\n' "$RUN_ID-$name" >> "$dir/.env"
-  PROJECTS+=("$dir")
   # stderr, not stdout: this function's stdout is the project directory.
   printf '  building and starting %s (from its pinned tag — minutes on a cold cache)\n' "$name" >&2
   # `up -d` then poll, rather than `up -d --wait`. --wait obeys each service's

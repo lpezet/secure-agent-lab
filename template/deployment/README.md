@@ -4,7 +4,7 @@ The wiring, pinned to a release tag. Copy this directory, fill in `.env`, drop
 in the providers you want, `docker compose up -d`.
 
 ```bash
-git clone --depth 1 --branch v1.14.0 \
+git clone --depth 1 --branch v1.14.1 \
   https://github.com/lpezet/secure-agent-lab.git /tmp/sal
 cp -r /tmp/sal/template/deployment ./my-deployment
 cd ./my-deployment
