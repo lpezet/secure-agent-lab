@@ -238,8 +238,14 @@ Produce:
   - `proxy/*.py` → `/addons` (numbered, e.g. `010_github.py`, load order is
     alphabetical)
   - `cred-gateway/*.conf` → `/etc/nginx/gateway.d`
+  - `lab/setup.d/*.sh` → `/etc/agent-setup.d` (one file per provider that
+    declares `lab_setup`, named for the provider)
   - `lab/Dockerfile` extending `stack/lab`'s base image with any
-    project-specific tools
+    project-specific tools. **Keep its `ENTRYPOINT`** — that is what runs the
+    fragments above, and an image without it comes up with every installed
+    provider unconfigured. Note the mount source is `lab/setup.d/`, not `lab/`:
+    the latter is also the build context and holds `entrypoint.sh`, which a
+    `*.sh` glob would pick up and run inside itself.
 - The two Docker networks: `secure` (broker + proxy + cred-gateway) and
   `lab` (lab + proxy + cred-gateway). The lab container is never on
   `secure`.
@@ -617,8 +623,18 @@ Copy the files, do not retype them. `<name>` is a directory under
 6. **Lab environment**: merge `lab_env` into the lab service's `environment:`.
    These are literals — `proxy-injected` and URLs. A real credential here is a
    bug, and `tests/integration/00-config-lint.test.sh` fails on one.
-7. **Lab setup**: if the entry has `lab_setup`, copy it into your `lab/` and
-   make sure your `setup.sh` runs it.
+7. **Lab setup**: if the entry has `lab_setup`, copy that file to
+   `lab/setup.d/<name>.sh` in your deployment. Rename it — the path inside an
+   entry is fixed (`lab/setup.sh`), so two providers installed as-is would
+   collide. Nothing else to wire: the lab image's entrypoint executes every
+   `*.sh` in that directory, in filename order, on every start, and a non-zero
+   exit stops the container rather than leaving the provider installed and
+   unconfigured. Uninstalling is deleting the file.
+
+   Two of the four entries ship one and both are load-bearing — `github` wires
+   the credential helper and forces `gh` onto HTTPS, `gcp` writes the inert ADC
+   file — so skipping this step gives you a provider that looks installed and
+   does not work.
 8. **Allowlist**: if you mount one, append the uncommented lines of the entry's
    `bank/<name>/allowlist` to it. Copy the lines as they are — do **not** derive
    them from `hosts`, which carries no methods, so an entry built that way

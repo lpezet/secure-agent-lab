@@ -156,6 +156,11 @@ services:
     volumes:
       - ../:/workspace:cached
       - proxy-certs:/proxy-certs:ro
+      # One lab_setup fragment per installed provider, run on every start by the
+      # image's entrypoint. Empty here, like broker/providers and
+      # cred-gateway/gateway.d — this file is the reference skeleton, and the
+      # content is the deployment's.
+      - ./lab/setup.d:/etc/agent-setup.d:ro
     environment:
       HTTP_PROXY: http://proxy:8080
       HTTPS_PROXY: http://proxy:8080

@@ -201,6 +201,16 @@ services:
         condition: service_healthy
     volumes:
       - proxy-certs:/proxy-certs:ro
+      # One lab_setup fragment per installed provider, run on every start by
+      # the image's entrypoint. Read-only on purpose: a fragment can already do
+      # anything the lab can do — that is why an entry is allowed to ship shell
+      # — but persisting a change back into the deployment is a different
+      # thing, and this directory is part of one.
+      #
+      # A subdirectory, not ./lab itself: that directory is also the build
+      # context and holds entrypoint.sh, which a *.sh glob would pick up and
+      # run inside itself.
+      - ./lab/setup.d:/etc/agent-setup.d:ro
       # The project the agent works on. Point this wherever you like — it is
       # the one mount whose contents the agent can write.
       - ${WORKSPACE_DIR:-./workspace}:/workspace
