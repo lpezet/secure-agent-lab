@@ -9,6 +9,7 @@
 # `api.anthropic.com` line blocks the provider completely while looking right.
 
 api.anthropic.com       GET,POST
+platform.claude.com     GET
 
 # GET is here for model listing (GET /v1/models), which some clients call at
 # startup; POST carries /v1/messages and /v1/messages/count_tokens. Narrowing
@@ -16,6 +17,26 @@ api.anthropic.com       GET,POST
 # know your client never lists models. Widening past these two is not needed by
 # anything: the Admin API under /v1/organizations is refused by the addon
 # regardless of what this file says.
+#
+# platform.claude.com is the client's startup connectivity check (Claude Code
+# 2.x calls GET /v1/oauth/hello) and failing it is FATAL — the agent installs
+# cleanly, gets its credential injected correctly, and still refuses to start.
+# It is the second line rather than an optional one for that reason. Leaving it
+# out is easy to misdiagnose: what the user sees names a proxy, not an
+# allowlist, so it reads as a credential or TLS problem rather than an egress
+# one.
+#
+#     Unable to connect to Anthropic services
+#     Failed to connect to platform.claude.com: Status 403
+#
+# That 403 is the proxy's own refusal. The endpoint needs no credential — it
+# answers 200 unauthenticated — which is why it belongs here and NOT in the
+# entry's `hosts`, on the same reasoning as the OPTIONAL block below.
+#
+# Editing this file is not enough on its own: the proxy reads the allowlist
+# once, at startup, and the file is a bind mount, so `docker compose up -d`
+# sees no config change and the container keeps the ruleset it already has.
+# Restart the proxy.
 
 # ---------------------------------------------------------------------------
 # OPTIONAL — nothing below is needed for the provider to work.
