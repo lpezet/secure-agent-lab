@@ -8,6 +8,64 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.13.1 — 2026-08-16
+
+The provider skeleton ships the egress file 1.13.0 gave every other entry. No
+boundary change.
+
+### Fixed
+
+**`template/provider/static-key/` now has an `allowlist`.** 1.13.0 gave every
+bank entry one so that installing an entry no longer produced a lab that could
+not use it — and left the skeleton without, so an entry scaffolded from it
+landed in exactly the state that release was about.
+
+The person hitting that is the least equipped to diagnose it: someone writing
+their first provider, whose broker file and addon are both new, whose requests
+are being denied by a third file nobody mentioned, and whose natural next move
+is to copy `hosts` into the deployment's allowlist — which is the bare-hostname
+trap 1.13.0's own entry describes, defaulting to `GET,HEAD,OPTIONS`.
+
+The skeleton's copy is written for a first-time author rather than lifted from a
+bank entry: one placeholder line, and comments carrying the three things that
+are not guessable from the syntax — state the METHODS, do not derive the file
+from `hosts`, and `hosts` is a different list whose asymmetry runs one way only.
+
+**Suite E composed the wrong path for a skeleton.** It built
+`bank/<name>/allowlist` out of `.name`, which is correct for a bank entry, where
+the directory and the name are the same string, and wrong for a skeleton, whose
+directory names its *shape* (`static-key`) while `.name` is the placeholder the
+author renames (`acme`). Widening the loop with no file present reported a
+missing file at `bank/acme/allowlist` — a path nothing was ever going to write,
+and one that sends an author looking in the wrong directory. Both suites C and E
+now derive it from the manifest's own directory, as suite B already did.
+
+Shipped in 1.13.0 and unreachable until now, since neither suite looked at a
+skeleton.
+
+### Changed
+
+**Suites C and E cover `template/provider/*` as well as `bank/*`.** Suite E was
+the check the skeleton fell out of — the reason this was possible at all — but
+suite C was `bank/`-only too, benign only because the skeleton exposes no route
+and so passes on the "declares none and ships no `.conf`" branch. Both are
+widened, which makes `template/provider/README.md`'s claim that skeletons are
+"validated like real entries" true for every suite rather than for most of them.
+
+Reported as [#104](https://github.com/lpezet/secure-agent-lab/issues/104), from
+the [`sal`](https://github.com/lpezet/secure-agent-lab-cli) side, where
+`sal providers create` had been telling the author the skeleton ships no
+allowlist — a patch over the gap rather than a fix for it.
+
+### Upgrading
+
+**Nothing to do**, unless you scaffolded a provider from the skeleton since
+1.13.0 and it has never worked. In that case the missing piece is egress, not
+your credential: give the entry an `allowlist` naming its hosts *with methods*,
+and copy those lines into the deployment's `/etc/agent-allowlist`.
+
+---
+
 ## 1.13.0 — 2026-08-16
 
 A bank entry now ships the egress it needs. No boundary change — a minor
