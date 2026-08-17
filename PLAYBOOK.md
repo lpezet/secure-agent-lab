@@ -686,7 +686,7 @@ Claude Code makes, all of which are POSTs. The symptom — every call failing on
 freshly installed provider — reads as "the credential is wrong", and the
 credential is fine.
 
-**Three things belong in the allowlist that are not in `hosts`:**
+**Four things belong in the allowlist that are not in `hosts`:**
 
 - Hosts the agent must reach but must never be credentialed — `github.com` for
   git push/pull, which `010_github.py` deliberately does not match.
@@ -696,6 +696,29 @@ credential is fine.
 - Multi-tenant suffixes that are fine to reach and unsafe to inject for —
   `*.workers.dev`. Reachable and credentialed are different lists, and this is
   the direction where conflating them is dangerous.
+- **The client's own startup checks, which are rarely on the API host.** Claude
+  Code calls `GET platform.claude.com/v1/oauth/hello` before it will run and
+  treats failure as fatal, so an `anthropic` entry listing only
+  `api.anthropic.com` installs cleanly, injects correctly, and produces an
+  agent that refuses to start. The endpoint needs no credential — it answers
+  200 unauthenticated — so it is allowlist-only by the first bullet's rule.
+  Find these the same way you find the methods: run the client once against a
+  real allowlist and read the `blocked` lines out of the trail. Do not reason
+  about them from the vendor's API documentation, which describes the API and
+  not the client.
+
+  This is the category most likely to be missed, because the failure does not
+  look like an egress failure. The message the user sees names the *proxy*, and
+  reads as a credential or TLS problem:
+
+  ```
+  Unable to connect to Anthropic services
+  Failed to connect to platform.claude.com: Status 403
+  ```
+
+  That 403 is `001_allowlist.py` refusing, and the matching
+  `{"event":"blocked","reason":"allowlist",...}` line in the trail is what says
+  so. Check there first when a freshly installed provider will not start.
 
 **Ship optional hosts commented out**, with the reason on the line. Telemetry,
 error reporting, CDN mirrors, anything the provider works without. The default
