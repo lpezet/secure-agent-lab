@@ -35,10 +35,20 @@ teardown() {
   # `PROJECTS+=("$dir")` inside `up`, the array was empty here on every run, and
   # `docker compose down -v` never ran once. Nothing under $WORK is anything but
   # a project this suite created, so the filesystem is the more honest list.
+  #
+  # `--rmi local` because compose tags what it builds `<project>-<service>`, and
+  # the project name carries $$ — so the tag is unique per run and can never be
+  # reused by the next one. Keeping it therefore buys nothing at all, which is
+  # the whole argument: the images looked expensive to rebuild and were not.
+  # `docker rmi` drops the tag, not the build cache, so the next run rebuilds
+  # from cache and pays nothing: two consecutive full runs measured 93s and 98s,
+  # the second starting with every image removed by the first. `local` is scoped
+  # to services with no `image:` key — every service in these compose files —
+  # and to this project alone.
   if [ "${KEEP_STACK:-0}" != "1" ]; then
     for p in "$WORK"/*/; do
       [ -f "$p/compose.yaml" ] || continue
-      (cd "$p" && docker compose down -v --remove-orphans >/dev/null 2>&1)
+      (cd "$p" && docker compose down -v --rmi local --remove-orphans >/dev/null 2>&1)
     done
     rm -rf "$WORK"
   else
@@ -80,6 +90,20 @@ sweep_stale() {
   for v in $(docker volume ls --format '{{.Name}}' 2>/dev/null | grep '^sattest-' || true); do
     case "$v" in *"$mine"*) continue ;; esac
     docker volume rm "$v" >/dev/null 2>&1
+  done
+  # And the images compose built, for the same kill -9 case. Last, because
+  # `docker rmi` refuses an image a container still uses and the containers
+  # above have to be gone first.
+  #
+  # `^sattest-` and NOT `^sat-test-`: one hyphen apart and they are different
+  # things. These are run-scoped (`sattest-<pid>-<shape>-<service>`) and grow
+  # without bound — 237 had accumulated over 28 run ids. The integration tier's
+  # are fixed-name (`sat-test-proxy`), deliberately reused across runs as a
+  # build cache, and there are at most a handful. Widening this anchor would
+  # silently turn every stacks run into a full rebuild of the other tier.
+  for i in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^sattest-' || true); do
+    case "$i" in *"$mine"*) continue ;; esac
+    docker rmi "$i" >/dev/null 2>&1
   done
 }
 sweep_stale
