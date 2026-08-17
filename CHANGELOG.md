@@ -8,6 +8,61 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.1 — 2026-08-17
+
+The stacks tier cleans up after itself. Nothing in any image, template or bank
+entry changed — this release is one test file.
+
+### Fixed
+
+**`tests/stacks/20-boundary.test.sh` never tore anything down.** `teardown`
+iterated a `PROJECTS` array that `up` appended to, but `up` prints the project
+directory on stdout, so every caller invokes it as `dir=$(up "$label" "$src")`
+— a command substitution, and therefore a subshell. The append never reached
+the parent, the array was empty on every run, and `docker compose down -v` had
+never run once, for any shape, since the suite was written.
+
+The comment above the trap is the part worth reading: it explains that leaked
+networks exhaust Docker's default address pools and that a later run then fails
+with *"all predefined address pools have been fully subnetted"* — which looks
+like a broken stack and is not. The mechanism written to prevent exactly that
+was inert.
+
+It stayed hidden because `sweep_stale` masks it. Each run deletes the *previous*
+runs' containers and networks at startup, so the only visible symptom is the
+most recent run's containers still up after a green suite — which is how it was
+finally noticed.
+
+`teardown` now derives the projects from `$WORK`. Everything under it is a
+project this suite created, so the filesystem is both simpler and harder to get
+wrong than an array that has to survive the right calling convention — and `up`
+cannot stop being called in a substitution, because printing the directory is
+its interface.
+
+**`sweep_stale` swept containers and networks but not volumes**, so a run that
+died without teardown leaked its volumes permanently. One machine here had 111
+across 28 run ids. They are small — near-empty audit logs and a CA cert — which
+is why this never showed up as disk pressure and simply grew. For calibration,
+deleting all 111 plus 237 stale images reclaimed roughly nothing: every run
+built the same Dockerfiles at the same pinned tag, so the images were identical
+layers wearing different tags, and the per-image size double-counts the shared
+base.
+
+**`KEEP_STACK=1` deleted the working directory anyway.** The loop skipped the
+teardown and fell through to `rm -rf "$WORK"`, so the stacks it deliberately
+left running had no project directory left — and `docker compose logs` against
+a deleted directory is not a thing. Poking at those stacks is the entire point
+of the flag. It now keeps `$WORK` and prints where it is.
+
+### Upgrading
+
+**Nothing to do**, and nothing to rebuild. No image, template or bank entry
+changed. If you run `tests/run.sh stacks` from a clone, it now leaves no
+containers, volumes or networks behind; if you have leftovers from before,
+the next run sweeps them.
+
+---
+
 ## 1.14.0 — 2026-08-17
 
 A bank entry's `lab_setup` fragment has somewhere to run. No boundary change —
