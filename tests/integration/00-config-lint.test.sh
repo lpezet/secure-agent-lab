@@ -453,7 +453,62 @@ else
     ko "template/deployment/lab/Dockerfile has drifted from stack/lab/Dockerfile" \
        "$(diff -u stack/lab/Dockerfile template/deployment/lab/Dockerfile | head -20)"
   fi
+
+  # Same reasoning, and stricter: entrypoint.sh is copied for the same reason
+  # the Dockerfile is, but it is executable content rather than build steps, so
+  # a divergence is a behaviour difference between the reference stack and the
+  # thing people deploy. Compared byte for byte — there are no build-context
+  # paths in it to legitimately differ, which is what forced the Dockerfile
+  # comparison to ignore comments.
+  if diff -q template/deployment/lab/entrypoint.sh stack/lab/entrypoint.sh >/dev/null 2>&1; then
+    ok "template/deployment/lab/entrypoint.sh is identical to stack/lab's"
+  else
+    ko "template/deployment/lab/entrypoint.sh has drifted from stack/lab/entrypoint.sh" \
+       "$(diff -u stack/lab/entrypoint.sh template/deployment/lab/entrypoint.sh | head -20)"
+  fi
+
+  # The mechanism is only wired if all three parts are present: the image runs
+  # the fragments, and the deployment mounts a directory for them to arrive in.
+  # A template with the entrypoint and no mount looks correct and runs nothing.
+  if grep -qE '^\s*-\s*\./lab/setup\.d:/etc/agent-setup\.d:ro\s*$' "$TPL"; then
+    ok "$TPL mounts lab/setup.d at /etc/agent-setup.d, read-only"
+  else
+    ko "$TPL does not mount lab/setup.d read-only" \
+       "without it the entrypoint has no fragments to run, and lab_setup entries install unconfigured"
+  fi
+  for d in template/deployment/lab/setup.d stack/lab/setup.d; do
+    if [ -d "$d" ]; then ok "$d exists"
+    else ko "$d is missing" "compose mounts it; docker would create it root-owned"; fi
+  done
 fi
+
+suite "the lab image wires up its entrypoint"
+# 80-lab-setup exercises the entrypoint's behaviour, but on a small base image —
+# the real one is 1.8GB, which this tier will not pull. So the part that test
+# cannot see is asserted here: that the Dockerfiles actually COPY the script and
+# run it. Without this pair of checks the mechanism could be deleted from the
+# image and every behavioural test would still pass.
+for df in stack/lab/Dockerfile template/deployment/lab/Dockerfile; do
+  [ -f "$df" ] || { skip "$df" "not present"; continue; }
+  if grep -qE '^COPY entrypoint\.sh /entrypoint\.sh' "$df"; then
+    ok "$df copies entrypoint.sh in"
+  else
+    ko "$df does not copy entrypoint.sh" "the fragments have nothing to run them"
+  fi
+  if grep -qE '^ENTRYPOINT \["/entrypoint\.sh"\]' "$df"; then
+    ok "$df runs it as the entrypoint"
+  else
+    ko "$df does not set ENTRYPOINT to /entrypoint.sh" \
+       "a lab_setup provider would install and never be configured"
+  fi
+  # Without a CMD the entrypoint has nothing to exec when the image is run
+  # without a command, and compose's `command:` has nothing to override.
+  if grep -qE '^CMD \["sleep", "infinity"\]' "$df"; then
+    ok "$df gives the entrypoint a default command"
+  else
+    ko "$df has no CMD" "the entrypoint exits rather than hand off"
+  fi
+done
 
 suite "the template and the reference skeleton describe the same stack"
 # Two files on purpose: stack/compose.yaml mounts the repo layout

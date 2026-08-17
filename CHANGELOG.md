@@ -8,6 +8,109 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.0 — 2026-08-17
+
+A bank entry's `lab_setup` fragment has somewhere to run. No boundary change —
+a minor because the **lab image gains an entrypoint** and the deployment gains
+a mount, which is a change to the shape of the thing people copy.
+
+### Added
+
+**`lab/setup.d/` and an entrypoint that runs it.** `lab_setup` was the one part
+of a bank entry `template/deployment/` had no mechanism for. `./lab` is a build
+context, the Dockerfile copied nothing into the image, and `command: sleep
+infinity` would not have run a fragment if one had been there. So the two
+entries that ship one installed cleanly and did not work:
+
+- `bank/github/lab/setup.sh` wires the git credential helper and sets
+  `credential.useHttpPath false`, without which git puts the repo path in the
+  lookup key and the gateway's exact-match route cannot satisfy it.
+- `bank/gcp/lab/setup.sh` writes the inert ADC file that lets a Google client
+  library's credential chain reach a token exchange the proxy can answer.
+  Without it the chain raises before opening a socket.
+
+The lab image now carries `entrypoint.sh`, which runs every `*.sh` in
+`/etc/agent-setup.d` in filename order and then execs the container's command.
+The deployment mounts `./lab/setup.d` there, read-only. In the image rather than
+the deployment because a fragment nothing runs is not an installed provider, and
+a deployment should not have to supply that mechanism itself — the same
+reasoning that puts `000_policy.py` in the proxy image.
+
+One file per provider, named for it, because the path inside an entry is fixed
+(`lab/setup.sh`) and two entries would collide. Installing is a copy, and
+uninstalling is deleting the file — which is the whole reason it is a directory
+of files rather than a shared file an installer edits and later has to unpick.
+
+On start rather than on create, so adding a provider to a running deployment is
+a file plus a restart, never a rebuild. A fragment that exits non-zero stops the
+container: a lab that comes up with a provider installed and unconfigured is the
+failure the mechanism exists to prevent.
+
+**Ordering is alphabetical by filename** — `gcp.sh` before `github.sh`. Nothing
+shipped depends on it; no two fragments interact. The entrypoint sorts under
+`LC_COLLATE=C`, so a deployment or installer that starts emitting `NNN_<name>.sh`
+gets numeric ordering with no change to the image.
+
+### Fixed
+
+**The two shipped fragments said they were sourced. They are executed.** Every
+effect either one has is a file it writes, and neither exports anything, so a
+child process suffices. Sourcing would put each fragment's `set -euo pipefail`
+into the entrypoint's own shell and let a stray `exit` kill it — and it would
+buy nothing even for a fragment that wanted it, because `docker exec` builds its
+environment from the container's config rather than from PID 1, so an export in
+an entrypoint never reaches an agent that shells in. A fragment needing an
+agent-visible variable writes `/etc/profile.d/`, or its entry declares
+`lab_env`.
+
+`bank/gcp/lab/setup.sh` also goes 644 → 755, so the two entries stop differing
+over a permission bit the entrypoint deliberately does not depend on: it invokes
+`bash` explicitly, since a mount can flatten the bit regardless.
+
+**`PLAYBOOK.md` step 7 named a file the template does not ship.** It said to
+"copy it into your `lab/` and make sure your `setup.sh` runs it" — there is no
+`setup.sh` in `template/deployment/`, and the "Generating a stack" section never
+described a lab setup mechanism at all. Both now say where the fragment goes and
+that nothing else needs wiring.
+
+**The schema's `lab_setup` description** said "on create" and said nothing about
+how the fragment is invoked. Description-only, so no `schema_version` bump.
+
+Reported as [#107](https://github.com/lpezet/secure-agent-lab/issues/107), the
+last item on [`sal`](https://github.com/lpezet/secure-agent-lab-cli)'s 1.0 list
+that could not be solved from that side.
+
+**Not a boundary fix, despite how it reads.** The report framed an unconfigured
+`gh` as silently leaving the proxy path. Under the default it does not — the
+`lab` network is `internal: true`, so there is no default gateway and ssh has no
+route out at all; it fails closed. The claim holds only under
+`LAB_INTERNAL=false`, where egress mediation is knowingly off, every tool can
+bypass the proxy, and `check-invariants.sh` reports the opt-out on every run.
+What was actually wrong is that two of four entries installed non-functional and
+nothing said so.
+
+### Upgrading
+
+**Rebuild the lab image**, which is what carries the entrypoint. If you are
+adopting the new template files, add the mount to your lab service:
+
+```yaml
+    volumes:
+      - ./lab/setup.d:/etc/agent-setup.d:ro
+```
+
+Mount `./lab/setup.d`, **not** `./lab` — that directory is also the build
+context and holds `entrypoint.sh`, which a `*.sh` glob would pick up and run
+inside itself.
+
+Then, for each installed provider whose entry declares `lab_setup`, copy the
+fragment to `lab/setup.d/<name>.sh`. If you already run those steps some other
+way — a devcontainer `postCreateCommand`, an entrypoint of your own — nothing
+forces you to move; the directory is simply empty, and the entrypoint says so
+and carries on.
+
+---
+
 ## 1.13.1 — 2026-08-16
 
 The provider skeleton ships the egress file 1.13.0 gave every other entry. No

@@ -93,7 +93,7 @@
     },
     "lab_setup": {
       "type": "string",
-      "description": "Shell fragment run inside the lab container on create. Permitted because it runs on the untrusted side already — it can do nothing the lab could not already do."
+      "description": "Path, within the entry, to a shell fragment the lab container runs. Permitted because it runs on the untrusted side already — it can do nothing the lab could not already do. Installed to the deployment's lab/setup.d/<name>.sh, renamed per entry because this path is fixed per entry and two would collide; the lab image's entrypoint EXECUTES every *.sh there, in filename order, on every start. Executed rather than sourced, so a fragment persists its effects by writing files — an export would not survive the child process, and would not reach an agent arriving via docker exec in any case. A non-zero exit stops the container rather than leaving a provider installed and unconfigured."
     }
   }
 }
