@@ -8,6 +8,83 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.2 — 2026-08-17
+
+`bank/anthropic` ships the egress Claude Code actually needs. One line in one
+bank entry, plus the playbook section that would have caught it.
+
+### Fixed
+
+**`bank/anthropic/allowlist` listed only `api.anthropic.com`**, so installing
+the entry produced a lab where the credential was fetched, injected and audited
+correctly, and the agent refused to start. Claude Code 2.x calls
+`GET platform.claude.com/v1/oauth/hello` before it will run and treats failing
+it as fatal.
+
+The entry now ships that host:
+
+```
+api.anthropic.com       GET,POST
+platform.claude.com     GET
+```
+
+**In the allowlist and deliberately not in `hosts`.** The endpoint answers 200
+unauthenticated, so it is a destination the agent must *reach*, not one the
+credential should be attached to — and `bank/anthropic/proxy/anthropic.py`
+compares `flow.request.host` to `"api.anthropic.com"` exactly, so nothing is
+injected for it. Adding it to `hosts` would have widened where a real token is
+sent, for nothing.
+
+Worth naming because of how it presents. The user sees the *proxy* blamed:
+
+```
+Unable to connect to Anthropic services
+Failed to connect to platform.claude.com: Status 403
+```
+
+That 403 is `001_allowlist.py` refusing. So the symptom of a missing allowlist
+line reads as a credential or a TLS problem, on a stack where the credential is
+fine — the same misdirection the 1.13.0 entry described for a missing `METHODS`
+column, one host over. The matching `{"event":"blocked","reason":"allowlist"}`
+line in the trail is what says otherwise, and is the thing to check first when a
+freshly installed provider will not start.
+
+### Changed
+
+**`PLAYBOOK.md`'s "things that belong in the allowlist and not in `hosts`" is
+now four**, gaining *the client's own startup checks, which are rarely on the
+API host*. The other three are structural — a protocol conflict, an addon
+answering locally, a multi-tenant suffix — and you can reason your way to them
+from the files. This one you cannot: it is a property of the vendor's client,
+not of their API, and their API documentation will not mention it. The section
+now says to find it by running the client once against a real allowlist and
+reading the `blocked` lines out of the trail.
+
+`raw.githubusercontent.com`, also blocked at Claude Code startup but not fatal,
+was considered and not added. It is already in `bank/github/allowlist` under
+OPTIONAL, alongside `codeload` and `objects.githubusercontent.com`, which is its
+correct home: it is GitHub egress, and it is multi-tenant.
+
+### Upgrading
+
+**Only if you installed the `anthropic` bank entry and mount an allowlist.** Add
+the line to your deployment's `/etc/agent-allowlist`, or recopy
+`bank/anthropic/allowlist`, then:
+
+```bash
+docker compose up -d --force-recreate proxy
+```
+
+The `--force-recreate` is not optional here. The proxy reads the allowlist once,
+at startup, and the file is a bind mount — so a plain `docker compose up -d`
+sees no config change and the container keeps the ruleset it already has, with
+no indication that your edit did nothing.
+
+No image changed. Deployments running without an allowlist file are permissive
+and were never affected.
+
+---
+
 ## 1.14.1 — 2026-08-17
 
 The stacks tier cleans up after itself. Nothing in any image, template or bank
