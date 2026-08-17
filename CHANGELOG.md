@@ -8,6 +8,48 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.3 — 2026-08-17
+
+The stacks tier stops leaking images. Nothing in any image, template or bank
+entry changed — this release is one test file, and the last of the leaks 1.14.1
+started on.
+
+### Fixed
+
+**`tests/stacks/20-boundary.test.sh` never removed the images compose built.**
+1.14.1 fixed the containers, the networks and the volumes; the images were the
+one resource left, and the tag list grew without bound — 237 over 28 run ids on
+one machine here. `teardown` now passes `--rmi local` to `down`, and
+`sweep_stale` picks up what a `kill -9` left behind, last in that function
+because `docker rmi` refuses an image a container still holds.
+
+Keeping them was never buying anything, which is what makes this a fix rather
+than a trade. The project name carries `$$`, so compose tags what it builds
+`sattest-<pid>-<shape>-<service>` — unique per run, and the next run cannot
+reuse it whatever we do. `docker rmi` drops the tag and not the build cache, so
+the rebuild is free: two consecutive full runs measured 93s and 98s, the second
+starting with every image the first had built already deleted.
+
+The 1.14.1 entry said deleting 111 volumes and 237 images reclaimed roughly
+nothing, and that still holds — this is not a disk fix. It is the same argument
+as the networks: a resource this suite creates on every run and never removes is
+a number that only goes up, and the cost of finding out where the ceiling is
+gets paid by whoever runs the suite next.
+
+The sweep anchors on `^sattest-` and deliberately not `^sat-test-`. One hyphen
+apart and opposite in kind: the stacks tier's are run-scoped and unbounded, the
+integration tier's are fixed-name and reused across runs *on purpose*, as that
+tier's build cache. Widening the anchor would quietly turn every stacks run into
+a full rebuild of the other tier.
+
+### Upgrading
+
+**Nothing to do**, and nothing to rebuild. No image, template or bank entry
+changed. If you have `sattest-*` images left over from before, the next
+`tests/run.sh stacks` sweeps them.
+
+---
+
 ## 1.14.2 — 2026-08-17
 
 `bank/anthropic` ships the egress Claude Code actually needs. One line in one
