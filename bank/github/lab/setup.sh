@@ -1,9 +1,13 @@
 #!/bin/bash
 # GitHub — lab-side setup fragment.
 #
-# Sourced by the deployment's setup.sh. Runs INSIDE the lab container, which is
-# the untrusted side already: nothing here can do anything the lab could not
-# already do. That is the whole reason a bank entry is allowed to ship shell.
+# Executed by the lab image's entrypoint, from /etc/agent-setup.d, on every
+# start. Runs INSIDE the lab container, which is the untrusted side already:
+# nothing here can do anything the lab could not already do. That is the whole
+# reason a bank entry is allowed to ship shell.
+#
+# Executed, not sourced — so write files rather than exporting variables, and
+# keep it idempotent, because it runs again on every restart.
 #
 # This file exists so that installing GitHub does not require separately knowing
 # to set `credential.useHttpPath false`. If that knowledge lived in the playbook
