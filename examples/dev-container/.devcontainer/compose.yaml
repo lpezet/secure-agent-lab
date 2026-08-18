@@ -140,6 +140,11 @@ services:
       # whole stack config as read-only while leaving the project writable.
       - ../.devcontainer:/workspace/.devcontainer:ro
       - proxy-certs:/proxy-certs:ro
+    # As in the template: without this there is no working directory at all and
+    # the container's command begins in `/`. devcontainer.json's
+    # `workspaceFolder` covers the terminals VS Code opens; this covers the
+    # command itself, and any `docker compose exec` run by hand.
+    working_dir: /workspace
     environment:
       HTTP_PROXY: http://proxy:8080
       HTTPS_PROXY: http://proxy:8080

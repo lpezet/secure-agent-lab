@@ -39,7 +39,7 @@ name: secure-agent-lab
 
 services:
   broker:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.3:stack/broker
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.4:stack/broker
     volumes:
       # The credential directory. Read-only, and the only place secrets live.
       - ${AGENT_CREDS_DIR:-${HOME}/.config/agent-creds}:/secrets:ro
@@ -74,7 +74,7 @@ services:
     restart: unless-stopped
 
   proxy:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.3:stack/proxy
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.4:stack/proxy
     depends_on:
       broker:
         condition: service_healthy
@@ -116,7 +116,7 @@ services:
     restart: unless-stopped
 
   cred-gateway:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.3:stack/cred-gateway
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.4:stack/cred-gateway
     depends_on:
       broker:
         condition: service_healthy
@@ -151,7 +151,7 @@ services:
   # the dashboard, not the audit trail.
   observer:
     profiles: ["observer"]
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.3:stack/observer
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.4:stack/observer
     volumes:
       - audit-logs:/var/log/audit:ro
     ports:
@@ -185,7 +185,7 @@ services:
   # different non-root uids sharing one directory — can both write to it. Runs
   # as root for exactly that reason; needs no network of its own either.
   log-rotator:
-    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.3:stack/log-rotator
+    build: https://github.com/lpezet/secure-agent-lab.git#v1.14.4:stack/log-rotator
     volumes:
       - audit-logs:/var/log/audit
     restart: unless-stopped
@@ -214,6 +214,13 @@ services:
       # The project the agent works on. Point this wherever you like — it is
       # the one mount whose contents the agent can write.
       - ${WORKSPACE_DIR:-./workspace}:/workspace
+    # Where the container's own command starts, and where `docker compose exec`
+    # lands when it is given no `--workdir` of its own. Without it there is no
+    # working directory at all — nothing here sets one and the lab image sets
+    # none — so both begin in `/`. An agent run as the lab's command then takes
+    # `/` for its project: Claude Code asks to trust `/`, and files its
+    # per-project state under that key instead of the workspace's.
+    working_dir: /workspace
     # lab.env, NOT .env. Each bank entry declares what the lab side needs under
     # `lab_env` in its manifest — GH_TOKEN=proxy-injected and the like — and
     # those belong in a file rather than restated here. It is a separate file
