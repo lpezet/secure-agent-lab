@@ -161,6 +161,13 @@ services:
       # cred-gateway/gateway.d — this file is the reference skeleton, and the
       # content is the deployment's.
       - ./lab/setup.d:/etc/agent-setup.d:ro
+    # Where the container's own command starts, and where `docker compose exec`
+    # lands when it is given no `--workdir` of its own. Without it there is no
+    # working directory at all — nothing here sets one and the lab image sets
+    # none — so both begin in `/`. An agent run as the lab's command then takes
+    # `/` for its project: Claude Code asks to trust `/`, and files its
+    # per-project state under that key instead of the workspace's.
+    working_dir: /workspace
     environment:
       HTTP_PROXY: http://proxy:8080
       HTTPS_PROXY: http://proxy:8080

@@ -633,6 +633,40 @@ for c in stack/compose.yaml template/deployment/compose.yaml examples/*/compose.
   check_contains "$c — sets the gRPC CA variable" "$(cat "$c")" "GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"
 done
 
+suite "a lab that mounts the workspace starts in it"
+# Without working_dir there is no working directory at all — no compose file
+# here sets one and the lab image sets none either — so the container's command
+# begins in `/`, and so does a `docker compose exec` given no `--workdir`. An
+# agent run as that command then takes `/` for its project: Claude Code asks to
+# trust `/` and files its per-project state under that key rather than the
+# workspace's, which stays invisible until a container recreate loses it.
+#
+# Conditional on the mount, because examples/claude-code deliberately has none:
+# its lab image carries a WORKDIR of its own and leaves the project mount to
+# whoever copies it.
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  skip "PyYAML unavailable — cannot read the lab service" ""
+else
+  for c in "${COMPOSES[@]}"; do
+    [ -f "$c" ] || continue
+    read -r mounted wd <<<"$(python3 - "$c" <<'PYEOF'
+import re, sys, yaml
+lab = ((yaml.safe_load(open(sys.argv[1])) or {}).get("services") or {}).get("lab") or {}
+vols = [v for v in (lab.get("volumes") or []) if isinstance(v, str)]
+print("yes" if any(re.search(r":/workspace(?::|$)", v) for v in vols) else "no",
+      lab.get("working_dir") or "-")
+PYEOF
+)"
+    if [ "$mounted" != yes ]; then
+      skip "$c — lab mounts no workspace" ""
+    elif [ "$wd" = /workspace ]; then
+      ok "$c — lab starts in /workspace"
+    else
+      ko "$c — lab does not start in the workspace it mounts" "working_dir: $wd"
+    fi
+  done
+fi
+
 suite "observer and log-rotator stay off secure/lab"
 # Deliberately no `networks:` key for either — see CLAUDE.md. They still land
 # on Compose's implicit `default` network, but every other service declares
