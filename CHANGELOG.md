@@ -8,6 +8,63 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.4 — 2026-08-18
+
+The lab container gets a working directory. No image changed — this release is
+one key in three compose files, and the lint that keeps it there.
+
+### Fixed
+
+**The lab had no working directory at all.** No compose file set `working_dir`,
+no lab `Dockerfile` set `WORKDIR`, and neither base image sets one either, so
+`Config.WorkingDir` was empty and the container started in `/` — both for the
+container's own command and for a `docker compose exec` given no `--workdir`.
+
+That is invisible for as long as the command is `sleep infinity` and whoever
+arrives `cd`s on the way in. It stops being invisible the moment an agent *is*
+the command: run Claude Code that way and it takes `/` for its project — asks to
+trust `/`, and files its per-project state under that key rather than the
+workspace's. Reported against a `sal`-managed lab pinned to 1.14.2 whose
+`compose.override.yaml` runs the agent as the lab's command; its `.claude.json`
+had exactly one project key, `"/"`.
+
+`working_dir: /workspace` does both jobs, measured against compose v5.1.4 rather
+than assumed: it sets the container's `WorkingDir`, so the command starts there,
+and it becomes the default for `docker compose exec`, so a shell lands there
+too. One key covers both ways in.
+
+Three files take it — `stack/compose.yaml`, `template/deployment/compose.yaml`
+and `examples/dev-container/.devcontainer/compose.yaml`. The dev-container
+example needs it despite `devcontainer.json` already setting `workspaceFolder`:
+that covers the terminals VS Code opens, and neither the container's command nor
+a hand-run `exec`. `examples/claude-code` is deliberately left alone — its lab
+image carries a `WORKDIR` of its own and its project mount is commented out for
+whoever copies it to fill in.
+
+The new suite in `tests/integration/00-config-lint.test.sh` is conditional on
+the mount for that reason: a lab that mounts a workspace must name it as its
+working directory, and a lab that mounts none is skipped. That excludes
+`examples/claude-code` by rule rather than by list, so the next deployment shape
+added is judged on what it mounts.
+
+### Upgrading
+
+**Add `working_dir: /workspace` to the `lab` service of your own
+`compose.yaml`.** Repinning does not deliver this one: the template is a file
+you copied, not something fetched at build time, so the fix reaches an existing
+deployment only by hand. It matters if anything in your stack runs an agent as
+the lab's command — an `sal`-managed lab with a `compose.override.yaml`
+`command:`, or any `docker compose run` — and is cosmetic otherwise.
+
+If an agent has already been running in `/`, it has per-project state filed
+under that key. For Claude Code that is a `"/"` entry in `~/.claude.json`
+holding the trust decision and history; moving to `/workspace` starts a fresh
+one, and the old entry can be dropped.
+
+**Nothing to rebuild.** No image, bank entry or provider file changed.
+
+---
+
 ## 1.14.3 — 2026-08-17
 
 The stacks tier stops leaking images. Nothing in any image, template or bank
