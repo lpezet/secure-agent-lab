@@ -8,6 +8,69 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.14.5 — 2026-08-19
+
+`bank/anthropic`'s OPTIONAL block describes the client people are running.
+Comments only, in one file — no uncommented line changes, no `hosts` change, and
+the boundary is exactly what it was.
+
+### Fixed
+
+**The OPTIONAL block offered a host the current client never contacts and
+omitted two it does.** Measured on one lab — Claude Code 2.1.234, every host
+that appeared in its audit trail over one run:
+
+```
+# downloads.claude.ai     GET     # in-place auto-update
+# statsig.anthropic.com   POST    # feature flags
+# sentry.io               POST    # error reporting
+# http-intake.logs.us5.datadoghq.com   POST   # client telemetry
+```
+
+`downloads.claude.ai` is the auto-updater, which retried and failed 32 times in
+that run. It ships with the reason **not** to enable it: a lab that pins
+`CLAUDE_VERSION` gets its updates from a rebuild, so blocked is the right
+default and the only cost is a noisy trail. `DISABLE_AUTOUPDATER` in the lab
+quiets it without opening egress, which is the cheaper way to buy silence.
+
+`http-intake.logs.us5.datadoghq.com` is client telemetry, and naming it matters
+because `sentry.io` was already here under "error reporting" — anyone who
+enabled that line to quiet telemetry blocks would have found it changed nothing.
+The `us5` shard is per-account, so the comment says to copy what your own trail
+shows rather than trusting the literal.
+
+`statsig.anthropic.com` keeps its line and gains the finding: never contacted in
+that run, with 2.1.x fetching its gates over `api.anthropic.com` instead
+(`GET /api/claude_code` and `POST /api/event_logging`, both credentialed).
+Annotated rather than deleted — one lab is thin evidence for removing an option,
+and a commented line costs nothing.
+
+The evidence is scoped in the file itself. A list of hosts one client generation
+contacted over one run is not a claim about the product, and the block says so
+rather than reading as settled.
+
+Two hosts stayed out on purpose. `raw.githubusercontent.com` appeared blocked
+nine times, and the proxy logs host and method with no path — so the trail
+cannot say whether that was the client fetching a plugin marketplace or the
+agent's own work, and an allowlist line justified by a guess is the wrong kind.
+The Remote Control transport hosts are absent for a different reason: the
+follow-up that measured them concluded the blocker is the scope of the
+credential the broker holds, not egress, so no line here would help.
+
+### Upgrading
+
+**Nothing to do**, and nothing to rebuild. No image, addon, provider file or
+manifest changed.
+
+An entry's allowlist is copied into the deployment at install time, so a
+deployment that already has `bank/anthropic` installed holds its own copy and
+will not pick these comments up. Nothing behaves differently for it — every
+line involved is commented on both sides. If you want the annotations, diff your
+`/etc/agent-allowlist` against the entry. And enabling any line still means
+restarting the proxy: it reads the allowlist once, at startup.
+
+---
+
 ## 1.14.4 — 2026-08-18
 
 The lab container gets a working directory. No image changed — this release is
