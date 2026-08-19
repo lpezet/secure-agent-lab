@@ -41,11 +41,42 @@ platform.claude.com     GET
 # ---------------------------------------------------------------------------
 # OPTIONAL — nothing below is needed for the provider to work.
 # ---------------------------------------------------------------------------
-# statsig.anthropic.com   POST    # feature flags; the client works without it
+# downloads.claude.ai     GET     # in-place auto-update
+# statsig.anthropic.com   POST    # feature flags
 # sentry.io               POST    # error reporting
+# http-intake.logs.us5.datadoghq.com   POST   # client telemetry
 #
-# Note what these are NOT: they belong in an allowlist and must never appear in
-# the entry's `hosts`. `hosts` is where the addon attaches the Anthropic
-# credential, and attaching it to a Sentry request is exactly the accident the
-# addon's host matching exists to prevent. Reachable and credentialed are two
-# different lists that happen to overlap.
+# What these four are is one lab's evidence, not a claim about the product:
+# Claude Code 2.1.234, every host that appeared in its trail over one run. A
+# different client generation may well contact a different set, so treat the
+# list as a starting point and read your own trail.
+#
+# downloads.claude.ai is the auto-updater, and leaving it blocked is the RIGHT
+# default rather than an oversight — a lab whose Dockerfile pins
+# CLAUDE_VERSION gets its updates from a rebuild, which is the point of pinning
+# it. The only cost is noise: the updater retries, so the trail fills with
+# blocked GETs (32 in that run). Someone who wants a quiet trail wants
+# DISABLE_AUTOUPDATER in the lab, not this line — opening egress to silence a
+# log is paying in the wrong currency.
+#
+# http-intake.logs.us5.datadoghq.com is client telemetry, and it is NOT the
+# sentry.io line above. Anyone who reaches for that one to quiet telemetry
+# blocks will find it changed nothing, which is the reason both are named here
+# rather than one standing in for the other. `us5` is the shard THAT account
+# was assigned; the region is not fixed, so another deployment may see us3 or
+# us1 and should copy what its own trail shows rather than this line.
+#
+# statsig.anthropic.com was never contacted in that run — not once, over the
+# whole trail. 2.1.x appears to fetch its gates over api.anthropic.com instead
+# (GET /api/claude_code and POST /api/event_logging both show up there,
+# credentialed). It stays listed because a line that costs nothing while
+# commented is the cheap side of the bet, and one lab is thin evidence for
+# deleting an option: an older or newer client may still want it.
+#
+# Note what all four are NOT: they belong in an allowlist and must never appear
+# in the entry's `hosts`. `hosts` is where the addon attaches the Anthropic
+# credential, and attaching it to a Sentry or Datadog request is exactly the
+# accident the addon's host matching exists to prevent — a telemetry sink is
+# the clearest case, since the whole point of the host is that it receives and
+# stores what it is sent. Reachable and credentialed are two different lists
+# that happen to overlap.
