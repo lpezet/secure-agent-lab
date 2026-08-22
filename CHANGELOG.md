@@ -8,6 +8,84 @@ means the guarantees changed or an upgrade needs manual steps to stay safe.
 
 ---
 
+## 1.15.0 — 2026-08-22
+
+The proxy records what it permitted, not only what it refused. A minor because
+**the proxy image changes** and the trail gains an event type — anything reading
+it sees a shape it has not seen before. The boundary itself is unchanged: no
+control was added, removed or relaxed.
+
+### Added
+
+**`001_allowlist.py` emits `allowed` alongside `blocked`.** It had one event
+type, and everything in the trail that said *something worked* — `cred_injected`,
+`token_injected` — came from a bank entry's addon rather than from the stack. So
+a deployment with no entry installed had a trail **structurally incapable of
+recording anything but denials**: able to say what the agent was stopped from
+doing and never what it did. That is not a corner case; it is the ordinary shape
+for anyone running a client that authenticates itself.
+
+```json
+{"ts":"…","service":"proxy","event":"allowed","reason":"allowlist","host":"api.anthropic.com","method":"POST"}
+```
+
+What it cost in practice, from the lab that prompted this: Remote Control was
+failing, and the trail showed 29 `blocked … method=PUT` lines and nothing else.
+That session creation and reads had *succeeded* — which is what made it an
+allowlist line needing `PUT` rather than a credential problem — lived only in
+`docker compose logs proxy`, which log-rotator does not manage, observer does not
+serve, and which vanishes when the container is recreated.
+
+**Host and method only, never the path.** This addon is in the base image and
+sees hosts it knows nothing about, so it cannot compute a safe slice of a path
+the way a provider's addon can — a vendor carrying its credential in the URL
+(Telegram's `/bot<TOKEN>/…`, an `?access_token=`) would have that credential
+written into a trail `observer` serves over HTTP with no auth. `host` and
+`method` are the two fields `blocked` already carried, so this adds **no new
+exposure surface at all**: the same shape, for the other outcome. Path-level
+detail still exists where it is safe to have it, as a provider addon's
+`cred_injected endpoint=/v1/messages`.
+
+**CONNECT is not recorded.** Every HTTPS request reaches this addon twice — the
+CONNECT that opens the tunnel, then the inner request — so logging both would
+double the trail to say `method=CONNECT`, which is never the agent's intent and
+is not what any allowlist entry is written against. The skip is scoped to the
+permitted path: a *refused* CONNECT has no inner request to stand in for it and
+is still recorded.
+
+**Permissive mode logs too**, as `reason=permissive`. Otherwise the deployment
+with no egress policy would have been the one whose trail said the least about
+its egress, and a reader could not tell "a rule permitted this" from "nothing is
+enforcing".
+
+### Upgrading
+
+**Repin and rebuild the proxy.** This one arrives by repinning rather than by
+editing a file: `001_allowlist.py` has been baked into the proxy image since
+1.10.0, so a deployment picks it up when it rebuilds from the new tag, and a
+vendored copy in `proxy/` is dead weight the entrypoint already ignores.
+
+**Expect the trail to grow, and check nothing reading it assumes one event
+type.** Measured on one lab: 206 proxied requests in 5m11s — mostly idle, and
+inflated by the retry storm above — which sustains to roughly 57k events/day at
+~7.5 MB/day. `log-rotator` already ships `daily`, `maxsize 50M`, `rotate 14`,
+`compress`, so the ceiling holds with room to spare and **no config change is
+needed**. A `grep` for `"event":"blocked"` is unaffected; anything counting
+lines, or treating every proxy line as a denial, is not.
+
+**There is no way to turn it off**, and that is deliberate rather than an
+oversight — a trail that records only refusals is the defect this fixes, so an
+opt-out would ship the defect as a setting. If volume is the concern, the knob
+is `log-rotator`, not the addon.
+
+**The observer is unchanged, and gets busier.** `allowed` will dominate the
+trail, `server.js` keeps a 200-event replay backlog and `dashboard.html` has no
+event filter, so the live view is noisier than it was. That is not a loss of
+record: the backlog is display-only, and the durable trail is the JSONL on the
+`audit-logs` volume, complete either way.
+
+---
+
 ## 1.14.5 — 2026-08-19
 
 `bank/anthropic`'s OPTIONAL block describes the client people are running.
