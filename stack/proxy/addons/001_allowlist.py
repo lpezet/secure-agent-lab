@@ -30,6 +30,13 @@ pick up changes: docker compose up -d --force-recreate proxy
 
 Internal host blocking (broker, cred-gateway) is handled by policy.py, which
 runs before this addon.
+
+Both outcomes are written to the audit trail — `allowed` and `blocked`, each
+carrying the host and the method and nothing else. Recording only denials
+would leave a deployment able to say what its agent was stopped from doing and
+never what it did, which is the half that says the deployment is working. See
+_log_allowed for why the path is not among the fields, and why CONNECT is not
+among the events.
 """
 import os
 from typing import Dict, Optional, Set
@@ -106,6 +113,39 @@ def _is_allowed(host: str, method: str) -> bool:
     return methods is None or method.upper() in methods
 
 
+def _log_allowed(host: str, method: str, reason: str) -> None:
+    """Record a request the proxy forwarded — host and method only, never the path.
+
+    THE PATH IS THE WHOLE SAFETY QUESTION, and the answer is no. This addon is
+    in the base image and sees hosts it knows nothing about, so it cannot
+    compute a safe slice of a path the way a provider's addon can: a vendor
+    that carries its credential in the URL (Telegram's /bot<TOKEN>/<method>, an
+    ?access_token= on the query) would have that credential written into the
+    trail, which observer then serves over HTTP with no auth. The safe slice is
+    provider-specific, which is why bank/anthropic/proxy/anthropic.py computes
+    its own and why there is no shared helper to reach for here.
+
+    Dropping the path costs less than it sounds. `host` and `method` are the
+    two fields `blocked` already carries, so this adds no field that was not
+    already being written — the same shape, for the other outcome. Path-level
+    detail already exists where it is safe to have it, as a provider addon's
+    `cred_injected endpoint=/v1/messages`. What had no record at all until now
+    is permitted traffic that carries no credential, which is precisely the
+    traffic no provider addon ever sees.
+
+    CONNECT is skipped. Every HTTPS request arrives here twice — the CONNECT
+    that opens the tunnel, then the inner request — so logging it would double
+    the trail's volume to say `method=CONNECT`, which is never the agent's
+    intent and is not what any allowlist entry is written against. The inner
+    request is the event. A CONNECT permitted whose inner request is then
+    denied still appears, as the `blocked` line: skipping applies to this
+    function only, never to a denial.
+    """
+    if method == "CONNECT":
+        return
+    audit.log_event("allowed", reason=reason, host=host, method=method)
+
+
 def running() -> None:
     _load()
 
@@ -120,8 +160,6 @@ def request(flow: http.HTTPFlow) -> None:
     if flow.response is not None:
         return
 
-    if _entries is None:
-        return
     # flow.request.host is the real destination. Do NOT use pretty_host here:
     # it prefers the client-supplied Host header, so the lab container could
     # point a request at its own server, spoof the header, and have the real
@@ -132,6 +170,17 @@ def request(flow: http.HTTPFlow) -> None:
     # looks like it is handling the problem. It is not; this line is.
     host = flow.request.host.lower()
     method = flow.request.method
+
+    # Permissive mode — no allowlist file, so every destination is forwarded.
+    # Logged rather than silently skipped: patched the other way round, the
+    # deployment with NO egress policy would be the one with the emptiest
+    # trail, which inverts what a trail is for. `reason` is what separates
+    # permitted-by-a-rule from permitted-because-nothing-is-enforcing, and a
+    # reader who cannot tell those apart has not learned anything from the line.
+    if _entries is None:
+        _log_allowed(host, method, "permissive")
+        return
+
     if not _is_allowed(host, method):
         flow.response = http.Response.make(
             403,
@@ -140,3 +189,6 @@ def request(flow: http.HTTPFlow) -> None:
         )
         ctx.log.warn(f"allowlist: BLOCKED {method} {host}")
         audit.log_event("blocked", reason="allowlist", host=host, method=method)
+        return
+
+    _log_allowed(host, method, "allowlist")
