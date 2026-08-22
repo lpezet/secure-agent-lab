@@ -152,6 +152,9 @@ fi
 ok "trail is non-empty ($(printf '%s' "$t" | wc -l) events)"
 check_contains "an injection was recorded" "$t" '"event":"token_injected"'
 check_contains "a block was recorded" "$t" '"event":"blocked"'
+# Permissive mode, since no allowlist file is mounted here — so this proxy
+# also exercises the branch that records forwarding when nothing is enforcing.
+check_contains "a permitted request was recorded" "$t" '"event":"allowed"'
 
 suite "no taint reaches the trail"
 check_not_contains "broker-issued credential is not logged" "$t" "$INJECTED_TAINT"
@@ -177,6 +180,17 @@ check_contains "cloudflare keeps segment 3 (/client/v4/<resource>)" "$t" \
   "\"endpoint\":\"/client/v4/$PREFIX_TAINT\""
 gh_line=$(printf '%s\n' "$t" | grep '"provider":"github"' | head -1)
 check_not_contains "github logs no path at all" "$gh_line" "endpoint"
+
+# The base allowlist addon keeps no path at all — not even the bounded prefix
+# the two provider addons above keep on purpose. It is in the image, so it
+# sees hosts it knows nothing about and cannot judge which segments are
+# structural for a vendor it has never heard of. PREFIX_TAINT is the sharp
+# test: it appears in the trail legitimately, in an `endpoint` field, so its
+# absence from this line is the base addon declining a slice that was safe
+# for someone else rather than a scan that found nothing.
+allowed_line=$(printf '%s\n' "$t" | grep '"event":"allowed"' | head -1)
+check_not_contains "the base allowlist addon logs no endpoint field" "$allowed_line" "endpoint"
+check_not_contains "and keeps no path segment, safe or otherwise" "$allowed_line" "$PREFIX_TAINT"
 
 # ------------------------------------------- positive control
 
